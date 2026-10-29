@@ -1,0 +1,10 @@
+{
+  "reviewedBy": "human review of the run log (aborted before the gate)",
+  "manualFixes": [],
+  "notes": [
+    "Infrastructure failure, not an agent failure: the laptop lid was closed at 21:56, three minutes into the Write-tests call, and the Mac slept until 22:28 (pmset log). The API stream died during sleep and the CLI call never returned; the pipeline's 15-minute timeout used a monotonic clock that stops during sleep, so it never fired.",
+    "Stopped by hand after about 37 minutes by killing the hung claude -p process (exit 143); the pipeline then recorded the failure and returned to main cleanly.",
+    "Fixed in the pipeline afterwards: the CLI deadline is now wall-clock time and a failed model call gets the same single retry as invalid JSON.",
+    "Enrich and Implement attempt 1 had completed (101-line diff, applied and committed). The story was rerun from scratch; that rerun replaced agent/stale-requests, and this attempt's diff is kept here as implement-1.diff."
+  ]
+}

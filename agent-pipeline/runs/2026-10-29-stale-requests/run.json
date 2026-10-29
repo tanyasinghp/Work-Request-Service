@@ -1,0 +1,144 @@
+{
+  "storyId": "stale-requests",
+  "startedAt": "2026-10-29T16:20:37+00:00",
+  "llmCalls": [
+    {
+      "file": "01-enrich",
+      "stage": "enrich",
+      "model": "claude-opus-5",
+      "costUsd": 0.2606895,
+      "error": null
+    },
+    {
+      "file": "02-implement-1",
+      "stage": "implement-1",
+      "model": "claude-opus-5",
+      "costUsd": 0.296179,
+      "error": null
+    },
+    {
+      "file": "03-write-tests",
+      "stage": "write-tests",
+      "model": null,
+      "costUsd": null,
+      "error": "claude -p exited 143: "
+    }
+  ],
+  "implementAttempts": [
+    {
+      "attempt": 1,
+      "summary": "Added a `STALE` problem code (declared last) with a `Problem.stale(inputIndex, requestId, ageInDays)` factory, and taught `WorkRequestValidator` an optional clock/threshold constructor that rejects requests whose age strictly exceeds `maxAgeDays`, keeping the no-arg constructor behaviour unchanged and running the check only on otherwise-valid requests. Wired it through a new `Clock` bean and a `StalenessProperties` record (`app.staleness`, `@DefaultValue(\"30\")`) in `ProcessingConfig`; `BatchObserver` needed no change because it already registers one counter per `ProblemCode` value.",
+      "diffLines": 101,
+      "applied": true,
+      "violations": [],
+      "warnings": [],
+      "uncertainties": [
+        "I could not see src/main/resources/application.yml, so I did not touch it; the 30-day default comes from @DefaultValue(\"30\"). If a test asserts the yml literally contains app.staleness.max-age-days: 30, that key still needs adding under the existing app: block.",
+        "The validator's own IllegalArgumentException message for maxAgeDays < 1 is \"maxAgeDays must be at least 1, was <value>\"; the property-prefixed message specified in the criteria lives in StalenessProperties.",
+        "Stale age is reported as whole days via Duration.toDays() (truncating), which matches the pinned 58-day example but means e.g. 30 days + 1 second reads as \"30 days old\"."
+      ]
+    }
+  ],
+  "gateAttempts": [],
+  "storyTitle": "Flag stale requests",
+  "story": "# Flag stale requests\n\nAs a maintenance supervisor, I want requests older than 30 days to be flagged as stale in\nthe problems list, so that old reports that may no longer be relevant get reviewed instead\nof silently joining the queue.\n\n\"Older than 30 days\" is measured against the time the batch is processed. A stale request\nis reported as a problem; whether it is also kept out of the queue is a decision the\nacceptance criteria must state explicitly.",
+  "branch": "agent/stale-requests",
+  "baseCommit": "e4d23403dbdb02c6815a74a88896c7f0d1cc862a",
+  "llm": {
+    "backend": "claude-cli",
+    "requestedModel": null,
+    "models": [
+      "claude-opus-5"
+    ]
+  },
+  "criteria": {
+    "title": "Flag requests older than 30 days as STALE and keep them out of the queue",
+    "criteria": [
+      {
+        "given": "the ProblemCode enum",
+        "when": "the story is implemented",
+        "then": "a new constant STALE exists, declared last (after CONFLICTING_REQUEST_ID), so ProblemCode.values() is NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE"
+      },
+      {
+        "given": "the Problem record",
+        "when": "Problem.stale(7, \"WR-100\", 45L) is called (signature: static Problem stale(int inputIndex, String requestId, long ageInDays))",
+        "then": "it returns a Problem with inputIndex 7, requestId \"WR-100\", code STALE, field \"requestedAt\", relatedRequestId null, escalatedFrom null, escalatedTo null, and message exactly \"WR-100 is stale: requested 45 days before processing\" (no input index in the message)"
+      },
+      {
+        "given": "a WorkRequestValidator built with new WorkRequestValidator(Clock.fixed(Instant.parse(\"2026-10-29T00:00:00Z\"), ZoneOffset.UTC), 30) and a batch of one otherwise-valid request whose requestedAt is \"2026-09-01T00:00:00Z\" (58 days earlier)",
+        "when": "validate(batch) is called",
+        "then": "the StageResult requests list is empty, problems contains exactly one Problem equal to Problem.stale(0, thatRequestId, 58L), and the trace is new StageTrace(\"validate\", 1, 0, List.of(\"<requestId> rejected: stale (58 days old)\"))"
+      },
+      {
+        "given": "a validator with a fixed clock at \"2026-10-29T00:00:00Z\" and maxAgeDays 30",
+        "when": "it validates otherwise-valid requests whose requestedAt is exactly 30 days earlier (\"2026-09-29T00:00:00Z\"), 30 days minus one second earlier, and 30 days plus one second earlier",
+        "then": "only the 30-days-plus-one-second request is flagged STALE (staleness is strictly greater than maxAgeDays, measured as Duration.between(requestedAt, clock.instant()).compareTo(Duration.ofDays(maxAgeDays)) > 0); the other two are kept in the requests list with no problems"
+      },
+      {
+        "given": "a validator with a fixed clock and maxAgeDays 30",
+        "when": "it validates an otherwise-valid request whose requestedAt is after the clock instant (future-dated)",
+        "then": "the request is kept and no STALE problem is reported (negative age is never stale)"
+      },
+      {
+        "given": "a validator with a fixed clock and maxAgeDays 30",
+        "when": "it validates a request that is 60 days old but also has a null equipmentId, and separately a null request, and separately a request with requestedAt reported as an unreadable InvalidField",
+        "then": "only the existing MISSING_FIELD / NULL_REQUEST / INVALID_VALUE problems are reported and no STALE problem is added; the staleness check runs only on requests that have no other validation problem, so it never dereferences a null requestedAt"
+      },
+      {
+        "given": "existing callers that construct the validator with the no-argument constructor new WorkRequestValidator() (and processors built with new WorkRequestProcessor(validator, resolver, sorter))",
+        "when": "any batch is validated, including requests years old",
+        "then": "no STALE problem is produced and no request is dropped for age: the no-arg constructor leaves the staleness check disabled, and the clock/threshold constructor WorkRequestValidator(Clock clock, int maxAgeDays) is the only way to enable it; the clock is rejected with NullPointerException when null and maxAgeDays < 1 is rejected with IllegalArgumentException"
+      },
+      {
+        "given": "a WorkRequestProcessor whose validator has a fixed clock at \"2026-10-29T00:00:00Z\" and maxAgeDays 30, and a batch containing one stale request (90 days old) that is otherwise valid and is a content duplicate of a fresh request, plus two fresh non-duplicate requests",
+        "when": "process(batch) is called",
+        "then": "the queue contains only the fresh requests (the stale one is excluded), the STALE problem appears among the validate-stage problems ordered by input index before any deduplicate-stage problem, the stale request produces no DUPLICATE problem and causes no priority escalation of the kept request, and the trace still has exactly three entries validate/deduplicate/prioritize with the validate out count excluding the stale request"
+      },
+      {
+        "given": "a batch containing stale and fresh requests and a processor with a fixed clock",
+        "when": "the same batch is shuffled and processed repeatedly",
+        "then": "the queue, the problem list and the trace notes are identical every time (staleness depends only on requestedAt and the clock, and the stale note is sorted into the validate notes with no input index in it)"
+      },
+      {
+        "given": "the Spring context with default configuration",
+        "when": "it starts",
+        "then": "a Clock bean returning Clock.systemUTC() is defined in ProcessingConfig, a StalenessProperties record @ConfigurationProperties(\"app.staleness\") with component maxAgeDays and @DefaultValue(\"30\") binds app.staleness.max-age-days, the workRequestValidator bean is built from that Clock and StalenessProperties.maxAgeDays, and application.yml contains app.staleness.max-age-days: 30"
+      },
+      {
+        "given": "the property app.staleness.max-age-days bound to 7",
+        "when": "the context starts and a request 10 days old is processed through the wired processor",
+        "then": "the request is reported STALE and excluded, showing the threshold is configurable; binding a value below 1 fails with IllegalArgumentException whose message is \"app.staleness.max-age-days must be at least 1, was <value>\""
+      },
+      {
+        "given": "the BatchObserver metrics wiring",
+        "when": "a processing result containing two STALE problems is observed",
+        "then": "a counter for ProblemCode.STALE is registered using the same naming scheme as the existing per-code counters and is incremented by 2, so there is still exactly one counter per ProblemCode value"
+      }
+    ],
+    "affectedClasses": [
+      "ProblemCode",
+      "Problem",
+      "WorkRequestValidator",
+      "StalenessProperties",
+      "ProcessingConfig",
+      "BatchObserver"
+    ],
+    "outOfScope": [
+      "Adding a fourth pipeline stage or a fourth trace entry for staleness",
+      "Changing the timestamps in sample-batch.json or the sample batch's pinned expectations",
+      "An API parameter or request header that overrides the staleness threshold per call",
+      "A review/acknowledge workflow, un-staling, or persistence of stale requests",
+      "Rejecting or warning about future-dated requestedAt values",
+      "Per-priority or per-equipment staleness thresholds",
+      "Frontend display of the new problem code"
+    ]
+  },
+  "outcome": "stopped",
+  "stoppedAt": "write-tests",
+  "reason": "model call failed: claude -p exited 143: ",
+  "endedOnBranch": "main",
+  "cleanAfterRun": true,
+  "finishedAt": "2026-10-29T17:01:30+00:00",
+  "durationSeconds": 2453,
+  "totalCostUsd": 0.5569
+}

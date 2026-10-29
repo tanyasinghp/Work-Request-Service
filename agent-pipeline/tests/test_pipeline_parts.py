@@ -111,6 +111,33 @@ class TestReport:
         assert "- None needed." in summary_markdown(self.RUN, manual_fixes=[], review_notes=["ok"])
 
 
+class FakeProcess:
+    """Stands in for subprocess.Popen, so no CLI (and no model) is ever started."""
+
+    def __init__(self, stdout: str = "", hang: bool = False):
+        self.stdout, self.hang = stdout, hang
+        self.inputs: list[str | None] = []
+        self.killed = False
+        self.returncode: int | None = None
+        self.cwd: str | None = None
+
+    def start(self, command, **kwargs):
+        self.cwd = kwargs["cwd"]
+        return self
+
+    def communicate(self, input=None, timeout=None):
+        self.inputs.append(input)
+        if len(self.inputs) > 100:
+            raise AssertionError("still waiting after 100 polls: the deadline is not enforced")
+        if self.hang and not self.killed:
+            raise subprocess.TimeoutExpired("claude", timeout)
+        self.returncode = -9 if self.killed else 0
+        return self.stdout, ""
+
+    def kill(self):
+        self.killed = True
+
+
 class TestClaudeCliBackend:
     def test_runs_headless_with_no_tools_and_the_schema(self):
         command = llm.ClaudeCli(model="opus").command("system text", {"type": "object"})
@@ -123,22 +150,34 @@ class TestClaudeCliBackend:
     def test_reads_structured_output_model_and_cost(self, monkeypatch):
         payload = {"is_error": False, "result": '{"a": 1}', "structured_output": {"a": 1}, "total_cost_usd": 0.5,
                    "modelUsage": {"claude-haiku-4-5": {"outputTokens": 10}, "claude-opus-5": {"outputTokens": 900}}}
-        seen = {}
+        fake = FakeProcess(stdout=json.dumps(payload))
+        monkeypatch.setattr(llm.subprocess, "Popen", fake.start)
 
-        def fake_run(command, **kwargs):
-            seen["cwd"] = kwargs["cwd"]
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+        result = llm.ClaudeCli().complete("s", "the prompt", {"type": "object"})
 
-        monkeypatch.setattr(llm.subprocess, "run", fake_run)
-        result = llm.ClaudeCli().complete("s", "p", {"type": "object"})
         assert (result.data, result.model, result.cost_usd) == ({"a": 1}, "claude-opus-5", 0.5)
-        assert not Path(seen["cwd"]).exists()  # an empty temp dir, removed afterwards
+        assert fake.inputs == ["the prompt"]
+        assert not Path(fake.cwd).exists()  # an empty temp dir, removed afterwards
 
     def test_turns_cli_errors_into_llm_errors(self, monkeypatch):
-        monkeypatch.setattr(llm.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
-            command, 0, stdout=json.dumps({"is_error": True, "subtype": "error_max_budget", "result": "x"}), stderr=""))
+        fake = FakeProcess(stdout=json.dumps({"is_error": True, "subtype": "error_max_budget", "result": "x"}))
+        monkeypatch.setattr(llm.subprocess, "Popen", fake.start)
         with pytest.raises(llm.LlmError, match="error_max_budget"):
             llm.ClaudeCli().complete("s", "p")
+
+    def test_gives_up_on_wall_clock_time_even_if_the_machine_slept(self, monkeypatch):
+        # The monotonic clock stops during sleep; the deadline must use wall-clock time.
+        fake = FakeProcess(hang=True)
+        monkeypatch.setattr(llm.subprocess, "Popen", fake.start)
+        wall = iter([1_000.0, 1_001.0, 1_000.0 + 2_000])  # start, still in time, then "woke up" past the deadline
+        monkeypatch.setattr(llm.time, "time", lambda: next(wall))
+
+        with pytest.raises(llm.LlmError, match="wall-clock"):
+            llm.ClaudeCli(timeout_seconds=900, poll_seconds=0.01).complete("s", "the prompt")
+
+        assert fake.killed
+        assert fake.inputs[0] == "the prompt"
+        assert all(sent is None for sent in fake.inputs[1:])  # input is sent once, never again
 
     def test_defaults_to_the_api_only_when_a_key_is_set(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -204,3 +243,42 @@ class TestStories:
     def test_ships_the_four_stories_from_the_spec(self):
         stories = sorted(path.stem for path in (Path(__file__).parent.parent / "stories").glob("*.md"))
         assert stories == ["low-priority-cap", "safety-critical-escalation", "stale-requests", "suspicious-timestamp"]
+
+
+class TestOneRetryPerStage:
+    """ask_json allows exactly one retry, whether the call failed or returned invalid JSON."""
+
+    class ScriptedLlm:
+        name = "scripted"
+
+        def __init__(self, *outcomes):
+            self.outcomes = list(outcomes)
+            self.calls = 0
+
+        def complete(self, system, prompt, schema=None):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return llm.LlmResult(text=json.dumps(outcome), data=outcome, model="m", cost_usd=None)
+
+    def ask(self, tmp_path, scripted):
+        from runlog import RunLog
+        from stages.common import SUMMARY_SCHEMA, ask_json
+        return ask_json(scripted, RunLog("story", root=tmp_path), "summarize", "system", "prompt", SUMMARY_SCHEMA)
+
+    def test_retries_a_failed_call_once(self, tmp_path):
+        scripted = self.ScriptedLlm(llm.LlmError("connection reset"), {"markdown": "## What changed"})
+        assert self.ask(tmp_path, scripted) == {"markdown": "## What changed"}
+        assert scripted.calls == 2
+
+    def test_retries_invalid_json_once_with_the_errors(self, tmp_path):
+        scripted = self.ScriptedLlm({"wrong": 1}, {"markdown": "ok"})
+        assert self.ask(tmp_path, scripted) == {"markdown": "ok"}
+
+    def test_fails_the_stage_after_the_second_failure(self, tmp_path):
+        from stages.common import StageFailed
+        scripted = self.ScriptedLlm(llm.LlmError("timeout"), llm.LlmError("timeout again"))
+        with pytest.raises(StageFailed, match="timeout again"):
+            self.ask(tmp_path, scripted)
+        assert scripted.calls == 2
