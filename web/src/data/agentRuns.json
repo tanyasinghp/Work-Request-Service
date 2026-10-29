@@ -1,0 +1,46 @@
+{
+  "runs": [
+    {
+      "id": "placeholder-0",
+      "title": "PLACEHOLDER — not a real run",
+      "placeholder": true,
+      "date": "2026-10-29",
+      "story": "PLACEHOLDER: this run shows the layout only. The agent pipeline overwrites agentRuns.json with real runs. Example story: requests with a requestedAt in the future get a SUSPICIOUS_TIMESTAMP problem.",
+      "enrich": {
+        "criteria": [
+          {
+            "given": "a request whose requestedAt is after the batch's processing time",
+            "when": "the batch is processed",
+            "then": "it is reported as SUSPICIOUS_TIMESTAMP and not accepted"
+          }
+        ],
+        "affectedClasses": ["ProblemCode", "WorkRequestValidator"],
+        "outOfScope": ["Clock skew tolerance"]
+      },
+      "implement": {
+        "attempts": [
+          { "attempt": 1, "summary": "Placeholder: first diff", "diffLines": 0 },
+          { "attempt": 2, "summary": "Placeholder: diff after the failing test output", "diffLines": 0 }
+        ]
+      },
+      "writeTests": {
+        "testNames": ["Placeholder.reportsFutureTimestampAsSuspicious"]
+      },
+      "gate": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "passed": false,
+            "failingTest": "Placeholder.existingTestBrokenByAttempt1",
+            "output": "Placeholder: the failing test output sent back to Implement would appear here."
+          },
+          { "attempt": 2, "passed": true }
+        ]
+      },
+      "summary": {
+        "text": "Placeholder: the generated PR description would appear here.",
+        "manualFixes": ["Placeholder: what was changed by hand would be listed here."]
+      }
+    }
+  ]
+}

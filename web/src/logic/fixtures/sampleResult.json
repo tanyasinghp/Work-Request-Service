@@ -1,0 +1,148 @@
+{
+  "accepted": [
+    {
+      "requestId": "REQ-101",
+      "equipmentId": "PUMP-7",
+      "priority": "CRITICAL",
+      "requestedAt": "2026-10-20T08:15:00Z",
+      "description": "Pump leaking"
+    },
+    {
+      "requestId": "REQ-102",
+      "equipmentId": "HVAC-2",
+      "priority": "HIGH",
+      "requestedAt": "2026-10-20T07:30:00Z",
+      "description": "Filter clogged"
+    },
+    {
+      "requestId": "REQ-104",
+      "equipmentId": "ELEV-1",
+      "priority": "HIGH",
+      "requestedAt": "2026-10-20T07:30:00Z",
+      "description": "Door sensor fault"
+    },
+    {
+      "requestId": "REQ-110",
+      "equipmentId": "DOOR-5",
+      "priority": "MEDIUM",
+      "requestedAt": "2026-10-20T08:00:00Z",
+      "description": "Lock jammed"
+    },
+    {
+      "requestId": "REQ-111",
+      "equipmentId": "FAN-6",
+      "priority": "MEDIUM",
+      "requestedAt": "2026-10-20T13:00:00Z",
+      "description": "Belt squeal"
+    },
+    {
+      "requestId": "REQ-112",
+      "equipmentId": "PARK-8",
+      "priority": "LOW",
+      "requestedAt": "2026-10-20T14:00:00Z",
+      "description": "Bench repainting"
+    }
+  ],
+  "problems": [
+    {
+      "inputIndex": 2,
+      "requestId": "REQ-103",
+      "code": "MISSING_FIELD",
+      "field": "equipmentId",
+      "relatedRequestId": null,
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "REQ-103 is missing equipmentId"
+    },
+    {
+      "inputIndex": 4,
+      "requestId": "REQ-105",
+      "code": "MISSING_FIELD",
+      "field": "requestedAt",
+      "relatedRequestId": null,
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "REQ-105 is missing requestedAt"
+    },
+    {
+      "inputIndex": 5,
+      "requestId": "REQ-106",
+      "code": "MISSING_FIELD",
+      "field": "description",
+      "relatedRequestId": null,
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "REQ-106 is missing description"
+    },
+    {
+      "inputIndex": 6,
+      "requestId": "REQ-107",
+      "code": "DUPLICATE",
+      "field": null,
+      "relatedRequestId": "REQ-101",
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "Duplicate of REQ-101"
+    },
+    {
+      "inputIndex": 7,
+      "requestId": "REQ-108",
+      "code": "DUPLICATE",
+      "field": null,
+      "relatedRequestId": "REQ-101",
+      "escalatedFrom": "MEDIUM",
+      "escalatedTo": "CRITICAL",
+      "message": "Duplicate of REQ-101; priority escalated MEDIUM to CRITICAL"
+    },
+    {
+      "inputIndex": 8,
+      "requestId": "REQ-109",
+      "code": "CONFLICTING_REQUEST_ID",
+      "field": null,
+      "relatedRequestId": null,
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "Request id REQ-109 is used by requests with different content"
+    },
+    {
+      "inputIndex": 9,
+      "requestId": "REQ-109",
+      "code": "CONFLICTING_REQUEST_ID",
+      "field": null,
+      "relatedRequestId": null,
+      "escalatedFrom": null,
+      "escalatedTo": null,
+      "message": "Request id REQ-109 is used by requests with different content"
+    }
+  ],
+  "trace": [
+    {
+      "stage": "validate",
+      "in": 13,
+      "out": 10,
+      "notes": [
+        "REQ-103 rejected: missing equipmentId",
+        "REQ-105 rejected: missing requestedAt",
+        "REQ-106 rejected: missing description"
+      ]
+    },
+    {
+      "stage": "deduplicate",
+      "in": 10,
+      "out": 6,
+      "notes": [
+        "REQ-109 rejected: 2 requests share this id with different content",
+        "REQ-101 kept; merged duplicates REQ-107, REQ-108",
+        "REQ-101 escalated MEDIUM to CRITICAL (from REQ-108)"
+      ]
+    },
+    {
+      "stage": "prioritize",
+      "in": 6,
+      "out": 6,
+      "notes": [
+        "Sorted by priority (highest first), then requestedAt (earliest first), then requestId"
+      ]
+    }
+  ]
+}
