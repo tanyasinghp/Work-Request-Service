@@ -25,15 +25,18 @@ public class WorkRequestController {
     private final WorkRequestProcessor processor;
     private final SampleBatchSource sampleBatchSource;
     private final BatchProperties batchProperties;
+    private final BatchObserver batchObserver;
 
     public WorkRequestController(RequestMapper requestMapper,
                                  WorkRequestProcessor processor,
                                  SampleBatchSource sampleBatchSource,
-                                 BatchProperties batchProperties) {
+                                 BatchProperties batchProperties,
+                                 BatchObserver batchObserver) {
         this.requestMapper = requestMapper;
         this.processor = processor;
         this.sampleBatchSource = sampleBatchSource;
         this.batchProperties = batchProperties;
+        this.batchObserver = batchObserver;
     }
 
     @PostMapping(path = "/batch", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -46,7 +49,8 @@ public class WorkRequestController {
             throw new InvalidBatchException("Batch has " + body.size() + " requests; the maximum is "
                     + batchProperties.maxSize());
         }
-        ProcessingResult result = processor.process(requestMapper.map((ArrayNode) body));
+        ProcessingResult result = batchObserver.observe(body.size(),
+                () -> processor.process(requestMapper.map((ArrayNode) body)));
         return BatchResponse.from(result);
     }
 
