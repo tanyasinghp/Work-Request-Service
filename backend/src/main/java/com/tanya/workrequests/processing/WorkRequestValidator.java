@@ -6,19 +6,42 @@ import com.tanya.workrequests.domain.ProblemCode;
 import com.tanya.workrequests.domain.StageTrace;
 import com.tanya.workrequests.domain.WorkRequest;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
  * Rejects null, incomplete, and unreadable requests. Every missing or invalid field is its
  * own problem, so a request with two bad fields reports both. Blank strings count as missing.
+ *
+ * <p>When a {@link Clock} and a maximum age are supplied, requests older than that age are
+ * also rejected as STALE so they never reach deduplication or the queue. Staleness is checked
+ * only for requests that passed every field check, so a null {@code requestedAt} is reported
+ * as a missing field and nothing else.
  */
 public class WorkRequestValidator {
 
     static final String STAGE = "validate";
+
+    // Null clock means staleness checking is off; the no-argument constructor keeps the
+    // pre-staleness behaviour for callers that have no notion of "now".
+    private final Clock clock;
+    private final Duration maxAge;
+
+    public WorkRequestValidator() {
+        this.clock = null;
+        this.maxAge = null;
+    }
+
+    public WorkRequestValidator(Clock clock, Duration maxAge) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.maxAge = Objects.requireNonNull(maxAge, "maxAge");
+    }
 
     public StageResult validate(List<WorkRequest> batch) {
         return validate(batch, Map.of());
@@ -37,11 +60,14 @@ public class WorkRequestValidator {
             WorkRequest request = batch.get(index);
             List<InvalidField> invalidFields = invalidFieldsByIndex.getOrDefault(index, List.of());
             List<Problem> requestProblems = problemsFor(index, request, invalidFields);
-            if (requestProblems.isEmpty()) {
-                valid.add(new IndexedRequest(index, request));
-            } else {
+            if (!requestProblems.isEmpty()) {
                 problems.addAll(requestProblems);
                 notes.add(rejectionNote(request, requestProblems));
+            } else if (isStale(request)) {
+                problems.add(Problem.stale(index, request.requestId(), maxAge.toDays()));
+                notes.add(request.requestId() + " rejected: stale");
+            } else {
+                valid.add(new IndexedRequest(index, request));
             }
         }
         // Sorted, and free of input indices, so the trace is identical whatever the input order.
@@ -49,6 +75,14 @@ public class WorkRequestValidator {
 
         StageTrace trace = new StageTrace(STAGE, batch.size(), valid.size(), notes);
         return new StageResult(valid, problems, trace);
+    }
+
+    /** Exactly {@code maxAge} old is still fresh; future-dated requests are never stale. */
+    private boolean isStale(WorkRequest request) {
+        if (clock == null) {
+            return false;
+        }
+        return Duration.between(request.requestedAt(), clock.instant()).compareTo(maxAge) > 0;
     }
 
     private static List<Problem> problemsFor(int index, WorkRequest request, List<InvalidField> invalidFields) {

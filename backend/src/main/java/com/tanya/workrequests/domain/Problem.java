@@ -70,6 +70,15 @@ public record Problem(int inputIndex,
                 "Request id " + requestId + " is used by requests with different content");
     }
 
+    /**
+     * A request whose age exceeds the configured maximum. The message quotes the configured
+     * threshold, not the request's actual age, so the same request reads the same every day.
+     */
+    public static Problem stale(int inputIndex, String requestId, long maxAgeDays) {
+        return new Problem(inputIndex, requestId, ProblemCode.STALE, null, null, null, null,
+                subject(requestId) + " is older than " + maxAgeDays + " days");
+    }
+
     private static String subject(String requestId) {
         return requestId == null ? "Request" : requestId;
     }

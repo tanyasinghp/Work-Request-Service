@@ -5,5 +5,6 @@ public enum ProblemCode {
     MISSING_FIELD,
     INVALID_VALUE,
     DUPLICATE,
-    CONFLICTING_REQUEST_ID
+    CONFLICTING_REQUEST_ID,
+    STALE
 }
