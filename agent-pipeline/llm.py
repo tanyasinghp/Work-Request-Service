@@ -7,10 +7,12 @@ model, reads files, applies diffs and runs the gate.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -46,9 +48,11 @@ class ClaudeCli:
 
     name = "claude-cli"
 
-    def __init__(self, model: str | None = None, timeout_seconds: int = 900, max_budget_usd: float | None = 5.0):
+    def __init__(self, model: str | None = None, timeout_seconds: int = 900, max_budget_usd: float | None = 5.0,
+                 poll_seconds: float = 5.0):
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.poll_seconds = poll_seconds
         self.max_budget_usd = max_budget_usd
 
     def command(self, system: str, schema: dict[str, Any] | None) -> list[str]:
@@ -66,17 +70,16 @@ class ClaudeCli:
         # An empty working directory: no project CLAUDE.md or files leak into the prompt.
         with tempfile.TemporaryDirectory(prefix="agent-pipeline-") as empty_dir:
             try:
-                process = subprocess.run(self.command(system, schema), input=prompt, capture_output=True, text=True,
-                                         cwd=empty_dir, timeout=self.timeout_seconds, check=False)
-            except subprocess.TimeoutExpired as error:
-                raise LlmError(f"claude -p timed out after {self.timeout_seconds}s") from error
+                process = subprocess.Popen(self.command(system, schema), stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=empty_dir)
             except FileNotFoundError as error:
                 raise LlmError("the `claude` CLI is not installed or not on PATH") from error
-        if process.returncode != 0:
-            raise LlmError(f"claude -p exited {process.returncode}: {(process.stderr or process.stdout)[-2000:]}")
-        payload = _parse_json(process.stdout)
+            returncode, stdout, stderr = self._wait(process, prompt)
+        if returncode != 0:
+            raise LlmError(f"claude -p exited {returncode}: {(stderr or stdout)[-2000:]}")
+        payload = _parse_json(stdout)
         if not isinstance(payload, dict):
-            raise LlmError(f"claude -p did not return JSON: {process.stdout[:500]}")
+            raise LlmError(f"claude -p did not return JSON: {stdout[:500]}")
         if payload.get("is_error"):
             detail = str(payload.get("result"))[:1000]
             raise LlmError(f"claude -p reported an error ({payload.get('subtype')}): {detail}")
@@ -88,6 +91,28 @@ class ClaudeCli:
                 data = _parse_json(text)
         return LlmResult(text=text, data=data, model=self._main_model(payload), cost_usd=payload.get("total_cost_usd"),
                          raw=payload)
+
+    def _wait(self, process: subprocess.Popen[str], prompt: str) -> tuple[int, str, str]:
+        """Waits for the CLI with a wall-clock deadline.
+
+        subprocess timeouts use a monotonic clock, which stops while a laptop sleeps; a call
+        whose network stream died during sleep then hangs indefinitely after waking. Checking
+        time.time() instead makes such a call fail promptly on wake.
+        """
+        deadline = time.time() + self.timeout_seconds
+        pending_input: str | None = prompt
+        while True:
+            try:
+                stdout, stderr = process.communicate(pending_input, timeout=self.poll_seconds)
+                return process.returncode, stdout, stderr
+            except subprocess.TimeoutExpired:
+                pending_input = None  # communicate() keeps writing the input it was first given.
+                if time.time() > deadline:
+                    process.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        process.communicate(timeout=10)
+                    raise LlmError(f"claude -p gave no answer within {self.timeout_seconds}s of wall-clock time "
+                                   "(the machine may have slept)") from None
 
     @staticmethod
     def _main_model(payload: dict[str, Any]) -> str:

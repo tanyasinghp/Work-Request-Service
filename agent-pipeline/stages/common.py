@@ -33,7 +33,7 @@ def notes() -> str:
 
 
 def ask_json(llm: Llm, log: RunLog, stage: str, system: str, prompt: str, schema_path: Path) -> dict[str, Any]:
-    """Asks for JSON matching `schema_path`; one retry with the errors, then the stage fails."""
+    """Asks for JSON matching `schema_path`. One retry (failed call or invalid JSON), then the stage fails."""
     schema = load_schema(schema_path)
     wire = wire_schema(schema)
     attempt_prompt = prompt
@@ -44,7 +44,10 @@ def ask_json(llm: Llm, log: RunLog, stage: str, system: str, prompt: str, schema
             result = llm.complete(system, attempt_prompt, wire)
         except LlmError as error:
             log.record_call(label, system, attempt_prompt, None, error=str(error), schema=wire)
-            raise StageFailed(stage, f"model call failed: {error}") from error
+            errors = [f"model call failed: {error}"]
+            if attempt == 1:
+                continue  # A dropped connection deserves the same single retry as invalid JSON.
+            raise StageFailed(stage, errors[0]) from error
         log.record_call(label, system, attempt_prompt, result, schema=wire)
         data = result.data
         errors = ["the response was not valid JSON"] if data is None else validate_criteria(data, schema)

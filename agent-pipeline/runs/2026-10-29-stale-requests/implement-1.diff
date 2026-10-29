@@ -1,0 +1,186 @@
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+--- a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+@@ -5,5 +5,6 @@ public enum ProblemCode {
+     MISSING_FIELD,
+     INVALID_VALUE,
+     DUPLICATE,
+-    CONFLICTING_REQUEST_ID
++    CONFLICTING_REQUEST_ID,
++    STALE
+ }
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+--- a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+@@ -62,6 +62,15 @@ public record Problem(int inputIndex,
+                 "Request id " + requestId + " is used by requests with different content");
+     }
+ 
++    /**
++     * A request that was already too old by the time the batch was processed. The age is in
++     * whole days so the message reads the same however the batch was ordered.
++     */
++    public static Problem stale(int inputIndex, String requestId, long ageInDays) {
++        return new Problem(inputIndex, requestId, ProblemCode.STALE, "requestedAt", null, null, null,
++                subject(requestId) + " is stale: requested " + ageInDays + " days before processing");
++    }
++
+     private static String subject(String requestId) {
+         return requestId == null ? "Request" : requestId;
+     }
+diff --git a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
+--- a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
++++ b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
+@@ -6,20 +6,51 @@ import com.tanya.workrequests.domain.ProblemCode;
+ import com.tanya.workrequests.domain.StageTrace;
+ import com.tanya.workrequests.domain.WorkRequest;
+ 
++import java.time.Clock;
++import java.time.Duration;
+ import java.util.ArrayList;
+ import java.util.Comparator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Objects;
+ import java.util.stream.Collectors;
+ 
+ /**
+  * Rejects null, incomplete, and unreadable requests. Every missing or invalid field is its
+  * own problem, so a request with two bad fields reports both. Blank strings count as missing.
++ *
++ * <p>Optionally also rejects requests that were already too old when the batch was processed.
++ * The check needs a clock, so it is off unless one is supplied; "now" is never read from
++ * {@code Instant.now()} directly, which keeps the stage deterministic under a fixed clock.
+  */
+ public class WorkRequestValidator {
+ 
+     static final String STAGE = "validate";
+ 
++    // Null means the staleness check is disabled; existing callers get the old behaviour.
++    private final Clock clock;
++    private final int maxAgeDays;
++
++    /** Validates fields only; no request is ever rejected for age. */
++    public WorkRequestValidator() {
++        this.clock = null;
++        this.maxAgeDays = 0;
++    }
++
++    /**
++     * @param clock source of "now" for the staleness check
++     * @param maxAgeDays requests older than this many days are rejected as stale; at least 1
++     */
++    public WorkRequestValidator(Clock clock, int maxAgeDays) {
++        this.clock = Objects.requireNonNull(clock, "clock");
++        if (maxAgeDays < 1) {
++            throw new IllegalArgumentException("maxAgeDays must be at least 1, was " + maxAgeDays);
++        }
++        this.maxAgeDays = maxAgeDays;
++    }
++
+     public StageResult validate(List<WorkRequest> batch) {
+         return validate(batch, Map.of());
+     }
+@@ -37,11 +68,20 @@ public class WorkRequestValidator {
+             WorkRequest request = batch.get(index);
+             List<InvalidField> invalidFields = invalidFieldsByIndex.getOrDefault(index, List.of());
+             List<Problem> requestProblems = problemsFor(index, request, invalidFields);
+-            if (requestProblems.isEmpty()) {
+-                valid.add(new IndexedRequest(index, request));
+-            } else {
++            if (!requestProblems.isEmpty()) {
+                 problems.addAll(requestProblems);
+                 notes.add(rejectionNote(request, requestProblems));
++                continue;
++            }
++            // Only reached for otherwise-valid requests, so requestedAt is never null here.
++            Long staleAgeInDays = staleAgeInDays(request);
++            if (staleAgeInDays == null) {
++                valid.add(new IndexedRequest(index, request));
++            } else {
++                problems.add(Problem.stale(index, request.requestId(), staleAgeInDays));
++                notes.add(request.requestId() + " rejected: stale (" + staleAgeInDays + " days old)");
+             }
+         }
+         // Sorted, and free of input indices, so the trace is identical whatever the input order.
+@@ -51,6 +91,21 @@ public class WorkRequestValidator {
+         return new StageResult(valid, problems, trace);
+     }
+ 
++    /**
++     * @return the age in whole days when the request is stale, or null when it is fresh,
++     *         future-dated, or the check is disabled
++     */
++    private Long staleAgeInDays(WorkRequest request) {
++        if (clock == null) {
++            return null;
++        }
++        Duration age = Duration.between(request.requestedAt(), clock.instant());
++        // Strictly greater: a request exactly at the threshold is still fresh.
++        if (age.compareTo(Duration.ofDays(maxAgeDays)) > 0) {
++            return age.toDays();
++        }
++        return null;
++    }
++
+     private static List<Problem> problemsFor(int index, WorkRequest request, List<InvalidField> invalidFields) {
+         if (request == null) {
+             return List.of(Problem.nullRequest(index));
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java b/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java
+@@ -0,0 +1,22 @@
++package com.tanya.workrequests.config;
++
++import org.springframework.boot.context.properties.ConfigurationProperties;
++import org.springframework.boot.context.properties.bind.DefaultValue;
++
++/**
++ * How old a request may be before it is rejected as stale, bound from {@code app.staleness.*}.
++ * Validated here so a nonsensical threshold fails at startup rather than silently dropping
++ * every request in a batch.
++ */
++@ConfigurationProperties("app.staleness")
++public record StalenessProperties(@DefaultValue("30") int maxAgeDays) {
++
++    public StalenessProperties {
++        if (maxAgeDays < 1) {
++            throw new IllegalArgumentException("app.staleness.max-age-days must be at least 1, was " + maxAgeDays);
++        }
++    }
++}
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+--- a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
++++ b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+@@ -8,6 +8,8 @@ import com.tanya.workrequests.processing.WorkRequestValidator;
+ import org.springframework.context.annotation.Bean;
+ import org.springframework.context.annotation.Configuration;
+ 
++import java.time.Clock;
++
+ /**
+  * Wires the framework-free processing classes. Every stage is stateless, so one shared
+  * instance of each (Spring's default singleton scope) is safe across concurrent requests.
+@@ -16,13 +18,19 @@ import org.springframework.context.annotation.Configuration;
+ public class ProcessingConfig {
+ 
+     @Bean
++    Clock clock() {
++        // UTC everywhere, so staleness never shifts with the server's zone.
++        return Clock.systemUTC();
++    }
++
++    @Bean
+     DescriptionNormalizer descriptionNormalizer() {
+         return new DescriptionNormalizer();
+     }
+ 
+     @Bean
+-    WorkRequestValidator workRequestValidator() {
+-        return new WorkRequestValidator();
++    WorkRequestValidator workRequestValidator(Clock clock, StalenessProperties stalenessProperties) {
++        return new WorkRequestValidator(clock, stalenessProperties.maxAgeDays());
+     }
+ 
+     @Bean
