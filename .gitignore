@@ -21,3 +21,4 @@ jacoco.exec
 # IDE
 .idea/
 .vscode/
+docs/DECISIONS.md
