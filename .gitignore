@@ -24,3 +24,9 @@ jacoco.exec
 docs/DECISIONS.md
 CLAUDE.md
 docs/SPEC.md
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
