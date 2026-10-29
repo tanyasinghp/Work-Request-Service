@@ -119,6 +119,7 @@ class FakeProcess:
         self.inputs: list[str | None] = []
         self.killed = False
         self.returncode: int | None = None
+        self.exit_code = 0
         self.cwd: str | None = None
 
     def start(self, command, **kwargs):
@@ -131,7 +132,7 @@ class FakeProcess:
             raise AssertionError("still waiting after 100 polls: the deadline is not enforced")
         if self.hang and not self.killed:
             raise subprocess.TimeoutExpired("claude", timeout)
-        self.returncode = -9 if self.killed else 0
+        self.returncode = -9 if self.killed else self.exit_code
         return self.stdout, ""
 
     def kill(self):
@@ -163,6 +164,14 @@ class TestClaudeCliBackend:
         fake = FakeProcess(stdout=json.dumps({"is_error": True, "subtype": "error_max_budget", "result": "x"}))
         monkeypatch.setattr(llm.subprocess, "Popen", fake.start)
         with pytest.raises(llm.LlmError, match="error_max_budget"):
+            llm.ClaudeCli().complete("s", "p")
+
+    def test_reports_a_usage_limit_plainly(self, monkeypatch):
+        payload = {"is_error": True, "api_error_status": 429, "result": "You've hit your session limit"}
+        fake = FakeProcess(stdout=json.dumps(payload) + "\nnoise from an MCP client")
+        fake.exit_code = 1
+        monkeypatch.setattr(llm.subprocess, "Popen", fake.start)
+        with pytest.raises(llm.LlmError, match=r"usage limit reached \(HTTP 429\): You've hit your session limit"):
             llm.ClaudeCli().complete("s", "p")
 
     def test_gives_up_on_wall_clock_time_even_if_the_machine_slept(self, monkeypatch):
