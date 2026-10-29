@@ -192,6 +192,20 @@ class DuplicateResolverTest {
     }
 
     @Test
+    void reportsConflictNotesInRequestIdOrder() {
+        // REQ-9's group appears first in the input, so input order would put its note first.
+        StageResult result = resolver.resolve(indexed(
+                request("REQ-9", "PUMP-7", MEDIUM, T0800, "Pump leaking"),
+                request("REQ-9", "ROOF-2", LOW, T0900, "Gutter blocked"),
+                request("REQ-1", "FAN-1", HIGH, T0800, "Belt squeal"),
+                request("REQ-1", "DOOR-5", HIGH, T0800, "Lock jammed")));
+
+        assertThat(result.trace().notes()).containsExactly(
+                "REQ-1 rejected: 2 requests share this id with different content",
+                "REQ-9 rejected: 2 requests share this id with different content");
+    }
+
+    @Test
     void conflictingGroupWithTwoIdenticalAndOneDifferentRejectsAll() {
         WorkRequest repeated = request("REQ-9", "PUMP-7", MEDIUM, T0800, "Pump leaking");
         WorkRequest different = request("REQ-9", "PUMP-7", MEDIUM, T0800, "Pump leaking badly");
