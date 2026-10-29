@@ -1,0 +1,666 @@
+diff --git a/backend/src/test/java/com/tanya/workrequests/domain/SuspiciousTimestampProblemTest.java b/backend/src/test/java/com/tanya/workrequests/domain/SuspiciousTimestampProblemTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/domain/SuspiciousTimestampProblemTest.java
+@@ -0,0 +1,70 @@
++package com.tanya.workrequests.domain;
++
++import org.junit.jupiter.api.Test;
++
++import java.time.Instant;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The new problem code and the factory that builds its problem. */
++class SuspiciousTimestampProblemTest {
++
++    private static final Instant FUTURE = Instant.parse("2026-10-21T08:30:00Z");
++
++    @Test
++    void declaresSuspiciousTimestampLastAfterConflictingRequestId() {
++        assertThat(ProblemCode.values()).containsExactly(
++                ProblemCode.NULL_REQUEST,
++                ProblemCode.MISSING_FIELD,
++                ProblemCode.INVALID_VALUE,
++                ProblemCode.DUPLICATE,
++                ProblemCode.CONFLICTING_REQUEST_ID,
++                ProblemCode.SUSPICIOUS_TIMESTAMP);
++    }
++
++    @Test
++    void buildsASuspiciousTimestampProblemForTheRequestedAtField() {
++        Problem problem = Problem.suspiciousTimestamp(3, "WR-1", FUTURE);
++
++        assertThat(problem.code()).isEqualTo(ProblemCode.SUSPICIOUS_TIMESTAMP);
++        assertThat(problem.field()).isEqualTo("requestedAt");
++    }
++
++    @Test
++    void keepsTheInputIndexAndRequestIdItWasGiven() {
++        Problem problem = Problem.suspiciousTimestamp(3, "WR-1", FUTURE);
++
++        assertThat(problem.inputIndex()).isEqualTo(3);
++        assertThat(problem.requestId()).isEqualTo("WR-1");
++    }
++
++    @Test
++    void leavesRelatedRequestIdAndEscalationFieldsNull() {
++        Problem problem = Problem.suspiciousTimestamp(0, "WR-1", FUTURE);
++
++        assertThat(problem.relatedRequestId()).isNull();
++        assertThat(problem.escalatedFrom()).isNull();
++        assertThat(problem.escalatedTo()).isNull();
++    }
++
++    @Test
++    void namesTheRequestAndTheInstantInTheMessage() {
++        Problem problem = Problem.suspiciousTimestamp(0, "WR-1", FUTURE);
++
++        assertThat(problem.message()).isEqualTo("WR-1 has requestedAt 2026-10-21T08:30:00Z in the future");
++    }
++
++    @Test
++    void fallsBackToAGenericSubjectWhenTheRequestIdIsNull() {
++        Problem problem = Problem.suspiciousTimestamp(0, null, FUTURE);
++
++        assertThat(problem.message()).isEqualTo("Request has requestedAt 2026-10-21T08:30:00Z in the future");
++    }
++
++    @Test
++    void rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept() {
++        Problem problem = Problem.suspiciousTimestamp(0, "WR-2", Instant.parse("2026-10-21T08:30:00.500Z"));
++
++        assertThat(problem.message()).isEqualTo("WR-2 has requestedAt 2026-10-21T08:30:00.500Z in the future");
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtValidationTest.java b/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtValidationTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtValidationTest.java
+@@ -0,0 +1,289 @@
++package com.tanya.workrequests.processing;
++
++import com.tanya.workrequests.domain.InvalidField;
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.WorkRequest;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneId;
++import java.time.ZoneOffset;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.atomic.AtomicInteger;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatNullPointerException;
++import static org.assertj.core.api.Assertions.tuple;
++
++/**
++ * Validation of requestedAt against the validator's clock. Everything uses a fixed clock except
++ * the few tests that must pin the no-arg constructor to the system clock.
++ */
++class FutureRequestedAtValidationTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T12:00:00Z");
++    private static final Clock FIXED = Clock.fixed(NOW, ZoneOffset.UTC);
++
++    private final WorkRequestValidator validator = new WorkRequestValidator(FIXED);
++
++    @Test
++    void reportsOneSuspiciousTimestampProblemForAFutureDatedRequest() {
++        WorkRequest future = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(future));
++
++        assertThat(result.problems()).singleElement().satisfies(problem -> {
++            assertThat(problem.code()).isEqualTo(ProblemCode.SUSPICIOUS_TIMESTAMP);
++            assertThat(problem.field()).isEqualTo("requestedAt");
++            assertThat(problem.inputIndex()).isZero();
++            assertThat(problem.requestId()).isEqualTo("WR-1");
++        });
++    }
++
++    @Test
++    void dropsTheFutureDatedRequestFromTheStageResultRequests() {
++        WorkRequest future = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(future));
++
++        assertThat(result.requests()).isEmpty();
++    }
++
++    @Test
++    void countsOnlyAcceptedRequestsInTheValidateTrace() {
++        List<WorkRequest> batch = List.of(
++                TestRequests.request("WR-1", "EQ-1", Priority.HIGH, "2026-10-21T08:30:00Z", "Pump leak"),
++                TestRequests.valid("WR-2"));
++
++        StageResult result = validator.validate(batch);
++
++        assertThat(result.trace().in()).isEqualTo(2);
++        assertThat(result.trace().out()).isEqualTo(1);
++    }
++
++    @Test
++    void acceptsARequestDatedExactlyAtTheClockInstant() {
++        WorkRequest onTheDot = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-20T12:00:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(onTheDot));
++
++        assertThat(result.problems()).isEmpty();
++        assertThat(result.requests()).extracting(IndexedRequest::request).containsExactly(onTheDot);
++    }
++
++    @Test
++    void acceptsARequestDatedOneMillisecondBeforeTheClockInstant() {
++        WorkRequest justBefore = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-20T11:59:59.999Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(justBefore));
++
++        assertThat(result.problems()).isEmpty();
++        assertThat(result.requests()).extracting(IndexedRequest::request).containsExactly(justBefore);
++    }
++
++    @Test
++    void flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow() {
++        WorkRequest justAfter = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-20T12:00:00.001Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(justAfter));
++
++        assertThat(result.problems()).extracting(Problem::code)
++                .containsExactly(ProblemCode.SUSPICIOUS_TIMESTAMP);
++    }
++
++    @Test
++    void reportsOnlyMissingFieldWhenRequestedAtIsNull() {
++        WorkRequest noTimestamp = TestRequests.request("WR-1", "EQ-1", Priority.HIGH, null, "Pump leak");
++
++        StageResult result = validator.validate(List.of(noTimestamp));
++
++        assertThat(result.problems()).extracting(Problem::code, Problem::field)
++                .containsExactly(tuple(ProblemCode.MISSING_FIELD, "requestedAt"));
++    }
++
++    @Test
++    void reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed() {
++        WorkRequest unreadable = TestRequests.request("WR-1", "EQ-1", Priority.HIGH, null, "Pump leak");
++        Map<Integer, List<InvalidField>> invalid =
++                Map.of(0, List.of(new InvalidField("requestedAt", "yesterday")));
++
++        StageResult result = validator.validate(List.of(unreadable), invalid);
++
++        assertThat(result.problems()).extracting(Problem::code, Problem::field)
++                .containsExactly(tuple(ProblemCode.INVALID_VALUE, "requestedAt"));
++    }
++
++    @Test
++    void reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem() {
++        WorkRequest incompleteAndFuture = TestRequests.request("WR-1", null, Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(incompleteAndFuture));
++
++        assertThat(result.problems()).extracting(Problem::code, Problem::field).containsExactly(
++                tuple(ProblemCode.MISSING_FIELD, "equipmentId"),
++                tuple(ProblemCode.SUSPICIOUS_TIMESTAMP, "requestedAt"));
++    }
++
++    @Test
++    void reportsBothProblemsForTheSameInputIndex() {
++        List<WorkRequest> batch = List.of(
++                TestRequests.valid("WR-0"),
++                TestRequests.request("WR-1", null, Priority.HIGH, "2026-10-21T08:30:00Z", "Pump leak"));
++
++        StageResult result = validator.validate(batch);
++
++        assertThat(result.problems()).extracting(Problem::inputIndex).containsExactly(1, 1);
++    }
++
++    @Test
++    void writesAnIndexFreeNoteListingMissingAndFutureReasons() {
++        WorkRequest incompleteAndFuture = TestRequests.request("WR-1", null, Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(incompleteAndFuture));
++
++        assertThat(result.trace().notes())
++                .containsExactly("WR-1 rejected: missing equipmentId, future requestedAt");
++    }
++
++    @Test
++    void writesAFutureRequestedAtNoteForAnOtherwiseValidRequest() {
++        WorkRequest future = TestRequests.request("WR-1", "EQ-1", Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(future));
++
++        assertThat(result.trace().notes()).containsExactly("WR-1 rejected: future requestedAt");
++    }
++
++    @Test
++    void labelsABlankIdRequestAsRequestWithoutIdInTheNote() {
++        WorkRequest blankId = TestRequests.request("   ", "EQ-1", Priority.HIGH,
++                "2026-10-21T08:30:00Z", "Pump leak");
++
++        StageResult result = validator.validate(List.of(blankId));
++
++        assertThat(result.trace().notes())
++                .containsExactly("Request without id rejected: missing requestId, future requestedAt");
++    }
++
++    @Test
++    void keepsNotesSortedWhenAFutureRequestIsRejected() {
++        List<WorkRequest> batch = List.of(
++                TestRequests.request("WR-9", "EQ-9", Priority.HIGH, "2026-10-21T08:30:00Z", "Pump leak"),
++                TestRequests.request("WR-1", null, Priority.HIGH, TestRequests.DEFAULT_TIME, "Seal swap"));
++
++        StageResult result = validator.validate(batch);
++
++        assertThat(result.trace().notes()).containsExactly(
++                "WR-1 rejected: missing equipmentId",
++                "WR-9 rejected: future requestedAt");
++    }
++
++    @Test
++    void noArgConstructorFlagsARequestDatedAfterTheRealNow() {
++        WorkRequest future = new WorkRequest("WR-1", "EQ-1", Priority.HIGH,
++                Instant.now().plus(Duration.ofHours(1)), "Pump leak");
++
++        StageResult result = new WorkRequestValidator().validate(List.of(future));
++
++        assertThat(result.problems()).extracting(Problem::code)
++                .containsExactly(ProblemCode.SUSPICIOUS_TIMESTAMP);
++    }
++
++    @Test
++    void noArgConstructorAcceptsARequestDatedBeforeTheRealNow() {
++        WorkRequest past = new WorkRequest("WR-1", "EQ-1", Priority.HIGH,
++                Instant.now().minus(Duration.ofHours(1)), "Pump leak");
++
++        StageResult result = new WorkRequestValidator().validate(List.of(past));
++
++        assertThat(result.problems()).isEmpty();
++    }
++
++    @Test
++    void acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast() {
++        WorkRequest sampleDated = TestRequests.valid("WR-1");
++
++        StageResult result = new WorkRequestValidator().validate(List.of(sampleDated));
++
++        assertThat(result.problems()).isEmpty();
++    }
++
++    @Test
++    void rejectsANullClock() {
++        assertThatNullPointerException()
++                .isThrownBy(() -> new WorkRequestValidator((Clock) null))
++                .withMessage("clock");
++    }
++
++    @Test
++    void readsTheClockOncePerValidateCall() {
++        CountingClock clock = new CountingClock(NOW);
++
++        new WorkRequestValidator(clock).validate(List.of(
++                TestRequests.valid("WR-1"), TestRequests.valid("WR-2"), TestRequests.valid("WR-3")));
++
++        assertThat(clock.reads()).isEqualTo(1);
++    }
++
++    @Test
++    void comparesEveryRequestInABatchAgainstTheSameInstant() {
++        // The clock jumps an hour per read, so a second read would make the second request look past.
++        CountingClock clock = new CountingClock(NOW, Duration.ofHours(1));
++        List<WorkRequest> batch = List.of(
++                TestRequests.request("WR-1", "EQ-1", Priority.HIGH, "2026-10-20T12:30:00Z", "Pump leak"),
++                TestRequests.request("WR-2", "EQ-2", Priority.HIGH, "2026-10-20T12:30:00Z", "Valve check"));
++
++        StageResult result = new WorkRequestValidator(clock).validate(batch);
++
++        assertThat(result.problems()).extracting(Problem::requestId).containsExactly("WR-1", "WR-2");
++    }
++
++    /** Counts reads so a test can pin "one instant per validate call". */
++    private static final class CountingClock extends Clock {
++
++        private final Instant start;
++        private final Duration step;
++        private final AtomicInteger reads = new AtomicInteger();
++
++        private CountingClock(Instant start) {
++            this(start, Duration.ZERO);
++        }
++
++        private CountingClock(Instant start, Duration step) {
++            this.start = start;
++            this.step = step;
++        }
++
++        int reads() {
++            return reads.get();
++        }
++
++        @Override
++        public Instant instant() {
++            return start.plus(step.multipliedBy(reads.getAndIncrement()));
++        }
++
++        @Override
++        public ZoneId getZone() {
++            return ZoneOffset.UTC;
++        }
++
++        @Override
++        public Clock withZone(ZoneId zone) {
++            return this;
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtPipelineTest.java b/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtPipelineTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/processing/FutureRequestedAtPipelineTest.java
+@@ -0,0 +1,169 @@
++package com.tanya.workrequests.processing;
++
++import com.tanya.workrequests.domain.InvalidField;
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.StageTrace;
++import com.tanya.workrequests.domain.WorkRequest;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.EnumSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Random;
++import java.util.Set;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/**
++ * The whole pipeline with a fixed clock: a future-dated request is rejected in validate and never
++ * reaches deduplicate, and the output stays the same whatever the input order.
++ */
++class FutureRequestedAtPipelineTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T12:00:00Z");
++    private static final Clock FIXED = Clock.fixed(NOW, ZoneOffset.UTC);
++
++    // Same equipment and description as PAST, so it would be a duplicate if it ever got that far.
++    private static final WorkRequest PAST = TestRequests.request("WR-PAST", "EQ-7", Priority.MEDIUM,
++            "2026-10-20T08:00:00Z", "Replace bearing");
++    private static final WorkRequest FUTURE_TWIN = TestRequests.request("WR-FUTURE", "EQ-7", Priority.CRITICAL,
++            "2026-10-21T08:00:00Z", "Replace bearing");
++    private static final WorkRequest FUTURE_OTHER = TestRequests.request("WR-LATER", "EQ-8", Priority.HIGH,
++            "2026-10-22T09:00:00Z", "Inspect valve");
++    private static final WorkRequest OTHER_PAST = TestRequests.valid("WR-OK");
++
++    private final WorkRequestProcessor processor = new WorkRequestProcessor(
++            new WorkRequestValidator(FIXED),
++            new DuplicateResolver(new DescriptionNormalizer()),
++            new WorkRequestSorter());
++
++    @Test
++    void reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems()).extracting(Problem::code)
++                .containsOnly(ProblemCode.SUSPICIOUS_TIMESTAMP);
++    }
++
++    @Test
++    void reportsNoDuplicateProblemForTheFutureTwin() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems()).noneMatch(problem -> problem.code() == ProblemCode.DUPLICATE);
++    }
++
++    @Test
++    void neverEscalatesAPriorityFromTheFutureTwin() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems()).extracting(Problem::escalatedTo).containsOnlyNulls();
++        assertThat(result.accepted()).contains(PAST);
++    }
++
++    @Test
++    void keepsTheThreeStageTraceWhenAFutureRequestIsRejected() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.trace()).extracting(StageTrace::stage)
++                .containsExactly("validate", "deduplicate", "prioritize");
++    }
++
++    @Test
++    void passesOnlyTheAcceptedRequestsIntoDeduplicate() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.trace().get(1).in()).isEqualTo(2);
++    }
++
++    @Test
++    void producesTheSameQueueForEveryInputOrder() {
++        ProcessingResult baseline = processor.process(batch());
++
++        for (int seed = 0; seed < 100; seed++) {
++            assertThat(processor.process(shuffled(seed)).accepted()).isEqualTo(baseline.accepted());
++        }
++    }
++
++    @Test
++    void producesTheSameProblemsForEveryInputOrder() {
++        List<String> baseline = describe(processor.process(batch()).problems());
++
++        for (int seed = 0; seed < 100; seed++) {
++            assertThat(describe(processor.process(shuffled(seed)).problems())).isEqualTo(baseline);
++        }
++    }
++
++    @Test
++    void producesTheSameTraceNotesForEveryInputOrder() {
++        List<List<String>> baseline = notes(processor.process(batch()));
++
++        for (int seed = 0; seed < 100; seed++) {
++            assertThat(notes(processor.process(shuffled(seed)))).isEqualTo(baseline);
++        }
++    }
++
++    @Test
++    void ordersSuspiciousTimestampProblemsByInputIndex() {
++        for (int seed = 0; seed < 100; seed++) {
++            List<Integer> indexes = processor.process(shuffled(seed)).problems().stream()
++                    .filter(problem -> problem.code() == ProblemCode.SUSPICIOUS_TIMESTAMP)
++                    .map(Problem::inputIndex)
++                    .toList();
++
++            assertThat(indexes).hasSize(2).isSorted();
++        }
++    }
++
++    @Test
++    void keepsEveryProblemCodeIncludingSuspiciousTimestampReachable() {
++        List<WorkRequest> covering = new ArrayList<>();
++        covering.add(null);
++        covering.add(TestRequests.request("WR-MISS", null, Priority.LOW, "2026-10-20T08:00:00Z", "No equipment"));
++        covering.add(TestRequests.request("WR-DUP-1", "EQ-9", Priority.MEDIUM, "2026-10-20T08:00:00Z", "Replace seal"));
++        covering.add(TestRequests.request("WR-DUP-2", "EQ-9", Priority.HIGH, "2026-10-20T09:00:00Z", "Replace seal"));
++        covering.add(TestRequests.request("WR-CONF", "EQ-1", Priority.LOW, "2026-10-20T08:00:00Z", "Alpha"));
++        covering.add(TestRequests.request("WR-CONF", "EQ-2", Priority.LOW, "2026-10-20T08:00:00Z", "Beta"));
++        covering.add(FUTURE_OTHER);
++
++        Set<ProblemCode> codes = EnumSet.noneOf(ProblemCode.class);
++        processor.process(covering).problems().forEach(problem -> codes.add(problem.code()));
++        // INVALID_VALUE needs a raw value that never parsed into a WorkRequest field.
++        new WorkRequestValidator(FIXED)
++                .validate(List.of(TestRequests.request("WR-RAW", "EQ-3", Priority.LOW, null, "Unreadable date")),
++                        Map.of(0, List.of(new InvalidField("requestedAt", "yesterday"))))
++                .problems().forEach(problem -> codes.add(problem.code()));
++
++        assertThat(codes).containsExactlyInAnyOrderElementsOf(EnumSet.allOf(ProblemCode.class));
++    }
++
++    private static List<WorkRequest> batch() {
++        return new ArrayList<>(List.of(PAST, FUTURE_TWIN, FUTURE_OTHER, OTHER_PAST));
++    }
++
++    private static List<WorkRequest> shuffled(int seed) {
++        List<WorkRequest> shuffled = batch();
++        Collections.shuffle(shuffled, new Random(seed));
++        return shuffled;
++    }
++
++    /** Problem content without the input index, which legitimately moves with the input order. */
++    private static List<String> describe(List<Problem> problems) {
++        return problems.stream()
++                .map(problem -> problem.code() + "|" + problem.requestId() + "|" + problem.field()
++                        + "|" + problem.message())
++                .sorted()
++                .toList();
++    }
++
++    private static List<List<String>> notes(ProcessingResult result) {
++        return result.trace().stream().map(StageTrace::notes).map(List::copyOf).toList();
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/ClockBeanWiringTest.java b/backend/src/test/java/com/tanya/workrequests/config/ClockBeanWiringTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/ClockBeanWiringTest.java
+@@ -0,0 +1,58 @@
++package com.tanya.workrequests.config;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.WorkRequestValidator;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.test.context.runner.ApplicationContextRunner;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The Clock bean and the validator that must be built with it. */
++class ClockBeanWiringTest {
++
++    private final ApplicationContextRunner runner = new ApplicationContextRunner()
++            .withUserConfiguration(ProcessingConfig.class);
++
++    @Test
++    void exposesAClockBeanNamedClock() {
++        runner.run(context -> assertThat(context).hasBean("clock"));
++    }
++
++    @Test
++    void theClockBeanIsTheSystemUtcClock() {
++        runner.run(context ->
++                assertThat(context.getBean("clock", Clock.class)).isEqualTo(Clock.systemUTC()));
++    }
++
++    @Test
++    void buildsTheValidatorWithTheContextClockSoFutureRequestsAreFlagged() {
++        runner.run(context -> {
++            Clock clock = context.getBean(Clock.class);
++            WorkRequest future = new WorkRequest("WR-1", "EQ-1", Priority.HIGH,
++                    clock.instant().plus(Duration.ofHours(1)), "Pump leak");
++
++            assertThat(context.getBean(WorkRequestValidator.class).validate(List.of(future)).problems())
++                    .extracting(Problem::code)
++                    .containsExactly(ProblemCode.SUSPICIOUS_TIMESTAMP);
++        });
++    }
++
++    @Test
++    void buildsTheValidatorWithTheContextClockSoPastRequestsAreAccepted() {
++        runner.run(context -> {
++            Clock clock = context.getBean(Clock.class);
++            WorkRequest past = new WorkRequest("WR-1", "EQ-1", Priority.HIGH,
++                    clock.instant().minus(Duration.ofHours(1)), "Pump leak");
++
++            assertThat(context.getBean(WorkRequestValidator.class).validate(List.of(past)).problems())
++                    .isEmpty();
++        });
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/api/BatchObserverSuspiciousTimestampTest.java b/backend/src/test/java/com/tanya/workrequests/api/BatchObserverSuspiciousTimestampTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/api/BatchObserverSuspiciousTimestampTest.java
+@@ -0,0 +1,55 @@
++package com.tanya.workrequests.api;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.DescriptionNormalizer;
++import com.tanya.workrequests.processing.DuplicateResolver;
++import com.tanya.workrequests.processing.WorkRequestProcessor;
++import com.tanya.workrequests.processing.WorkRequestSorter;
++import com.tanya.workrequests.processing.WorkRequestValidator;
++import io.micrometer.core.instrument.Counter;
++import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.Arrays;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** Metrics keep one rejection counter per problem code, including the new one. */
++class BatchObserverSuspiciousTimestampTest {
++
++    private static final Clock FIXED = Clock.fixed(Instant.parse("2026-10-20T12:00:00Z"), ZoneOffset.UTC);
++
++    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
++    private final BatchObserver observer = new BatchObserver(registry);
++    private final WorkRequestProcessor processor = new WorkRequestProcessor(
++            new WorkRequestValidator(FIXED),
++            new DuplicateResolver(new DescriptionNormalizer()),
++            new WorkRequestSorter());
++
++    @Test
++    void registersOneRejectionCounterPerProblemCode() {
++        List<String> codes = registry.find("workrequests.rejected").counters().stream()
++                .map(counter -> counter.getId().getTag("code"))
++                .toList();
++
++        assertThat(codes).containsExactlyInAnyOrderElementsOf(
++                Arrays.stream(ProblemCode.values()).map(ProblemCode::name).toList());
++    }
++
++    @Test
++    void countsAFutureDatedRequestUnderTheSuspiciousTimestampCode() {
++        List<WorkRequest> batch = List.of(new WorkRequest("WR-1", "EQ-1", Priority.HIGH,
++                Instant.parse("2026-10-21T08:30:00Z"), "Pump leak"));
++
++        observer.observe(batch.size(), () -> processor.process(batch));
++
++        Counter counter = registry.get("workrequests.rejected").tag("code", "SUSPICIOUS_TIMESTAMP").counter();
++        assertThat(counter.count()).isEqualTo(1.0);
++    }
++}

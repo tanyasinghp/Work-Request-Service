@@ -98,7 +98,12 @@ def return_to(base: str) -> None:
 
 
 def diff_between(base: str, ref: str = "HEAD") -> str:
-    return git("diff", f"{base}...{ref}").stdout
+    """The agent's change: backend/src only, from the run's base commit, so nothing else is counted."""
+    return git("diff", base, ref, "--", BACKEND_SRC).stdout
+
+
+def commits_since(base: str, ref: str = "HEAD") -> list[str]:
+    return git("rev-list", "--reverse", f"{base}..{ref}").stdout.split()
 
 
 def show_file(ref: str, path: str) -> str | None:
