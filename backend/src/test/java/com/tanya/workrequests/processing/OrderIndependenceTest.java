@@ -1,5 +1,7 @@
 package com.tanya.workrequests.processing;
 
+import com.tanya.workrequests.domain.InvalidField;
+import com.tanya.workrequests.domain.ParsedBatch;
 import com.tanya.workrequests.domain.Priority;
 import com.tanya.workrequests.domain.Problem;
 import com.tanya.workrequests.domain.ProblemCode;
@@ -12,8 +14,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.function.Function;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -35,19 +41,19 @@ class OrderIndependenceTest {
 
     @Test
     void producesIdenticalOutputAcross100Shuffles() {
-        assertSameOutputAcrossShuffles(SampleBatch.load(), 100);
+        assertSameOutputAcrossShuffles(SampleBatch.load(), 100, batch -> processor.process(batch));
     }
 
     @Test
     void producesIdenticalOutputAcross50ShufflesOfALargeGeneratedBatch() {
-        assertSameOutputAcrossShuffles(generatedBatch(), 50);
+        assertSameOutputAcrossShuffles(generatedBatch(), 50, this::processElements);
     }
 
     @Test
     void generatedBatchCoversEveryKindOfProblem() {
-        List<WorkRequest> batch = generatedBatch();
+        List<Element> batch = generatedBatch();
 
-        ProcessingResult result = processor.process(batch);
+        ProcessingResult result = processElements(batch);
 
         assertThat(batch).hasSize(200);
         assertThat(result.problems()).extracting(Problem::code).contains(ProblemCode.values());
@@ -58,15 +64,16 @@ class OrderIndependenceTest {
                 .anyMatch(note -> note.contains("merged duplicates") && note.contains(", "));
     }
 
-    private void assertSameOutputAcrossShuffles(List<WorkRequest> batch, int shuffles) {
-        ProcessingResult expected = processor.process(batch);
+    private <T> void assertSameOutputAcrossShuffles(List<T> batch, int shuffles,
+                                                    Function<List<T>, ProcessingResult> process) {
+        ProcessingResult expected = process.apply(batch);
         Random random = new Random(SHUFFLE_SEED);
 
         for (int run = 1; run <= shuffles; run++) {
-            List<WorkRequest> shuffled = new ArrayList<>(batch);
+            List<T> shuffled = new ArrayList<>(batch);
             Collections.shuffle(shuffled, random);
 
-            ProcessingResult actual = processor.process(shuffled);
+            ProcessingResult actual = process.apply(shuffled);
 
             assertThat(actual.accepted()).as("accepted, shuffle %d", run).isEqualTo(expected.accepted());
             assertThat(actual.trace()).as("trace, shuffle %d", run).isEqualTo(expected.trace());
@@ -78,17 +85,19 @@ class OrderIndependenceTest {
     private static List<Problem> withoutIndex(List<Problem> problems) {
         return problems.stream()
                 .map(problem -> new Problem(0, problem.requestId(), problem.code(), problem.field(),
-                        problem.relatedRequestId(), problem.message()))
+                        problem.relatedRequestId(), problem.escalatedFrom(), problem.escalatedTo(),
+                        problem.message()))
                 .sorted(Comparator.comparing(Problem::toString))
                 .toList();
     }
 
     /**
      * 200 requests built from a fixed seed: 100 distinct, 40 duplicates (some three-way, some
-     * tied on time), 15 exact repeats, 23 in conflict groups, 17 invalid, 5 null. Times sit on a
-     * 15-minute grid so priority and time ties are common.
+     * tied on time), 15 exact repeats, 23 in conflict groups, 17 invalid (including unreadable
+     * priority and date values), 5 null. Times sit on a 15-minute grid so priority and time
+     * ties are common.
      */
-    private static List<WorkRequest> generatedBatch() {
+    private static List<Element> generatedBatch() {
         Random random = new Random(GENERATOR_SEED);
         List<WorkRequest> batch = new ArrayList<>();
 
@@ -136,20 +145,46 @@ class OrderIndependenceTest {
             batch.add(new WorkRequest(null, target.equipmentId(), Priority.CRITICAL,
                     target.requestedAt().minus(Duration.ofHours(1)), target.description()));
         }
+        // Unreadable values (as the API mapper reports them) sit at the same index as their request.
+        Map<Integer, List<InvalidField>> invalidFields = new HashMap<>();
         for (int i = 0; i < 12; i++) {
             String id = String.format("BAD-%03d", i);
-            batch.add(switch (i % 4) {
+            switch (i % 6) {
+                case 4 -> invalidFields.put(batch.size(), List.of(new InvalidField("priority", "URGENT")));
+                case 5 -> invalidFields.put(batch.size(), List.of(new InvalidField("requestedAt", "yesterday")));
+                default -> { }
+            }
+            batch.add(switch (i % 6) {
                 case 0 -> new WorkRequest(id, "  ", randomPriority(random), slot(i), "Bad " + i);
                 case 1 -> new WorkRequest(id, "BEQ-" + i, null, slot(i), "Bad " + i);
                 case 2 -> new WorkRequest(id, "BEQ-" + i, randomPriority(random), null, "Bad " + i);
-                default -> new WorkRequest(id, null, randomPriority(random), slot(i), null);
+                case 3 -> new WorkRequest(id, null, randomPriority(random), slot(i), null);
+                case 4 -> new WorkRequest(id, "BEQ-" + i, null, slot(i), "Bad " + i);
+                default -> new WorkRequest(id, "BEQ-" + i, randomPriority(random), null, "Bad " + i);
             });
         }
 
         for (int i = 0; i < 5; i++) {
             batch.add(null);
         }
-        return batch;
+        return IntStream.range(0, batch.size())
+                .mapToObj(index -> new Element(batch.get(index), invalidFields.getOrDefault(index, List.of())))
+                .toList();
+    }
+
+    /** One input element and the fields the mapper found unreadable, so a shuffle moves both together. */
+    private record Element(WorkRequest request, List<InvalidField> invalidFields) {
+    }
+
+    private ProcessingResult processElements(List<Element> elements) {
+        Map<Integer, List<InvalidField>> invalidFields = new HashMap<>();
+        for (int index = 0; index < elements.size(); index++) {
+            if (!elements.get(index).invalidFields().isEmpty()) {
+                invalidFields.put(index, elements.get(index).invalidFields());
+            }
+        }
+        List<WorkRequest> requests = elements.stream().map(Element::request).toList();
+        return processor.process(new ParsedBatch(requests, invalidFields));
     }
 
     private static Priority randomPriority(Random random) {

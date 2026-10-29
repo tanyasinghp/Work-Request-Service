@@ -30,12 +30,10 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Same Jackson modules (incl. JSR-310) that spring-boot-starter-web pulls in on Day 2;
-             test scope today because only tests parse sample-batch.json. -->
+        <!-- Jackson for RequestMapper; replaced by spring-boot-starter-web, which includes it. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-json</artifactId>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 

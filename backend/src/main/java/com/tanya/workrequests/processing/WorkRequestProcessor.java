@@ -1,5 +1,6 @@
 package com.tanya.workrequests.processing;
 
+import com.tanya.workrequests.domain.ParsedBatch;
 import com.tanya.workrequests.domain.ProcessingResult;
 import com.tanya.workrequests.domain.WorkRequest;
 
@@ -27,8 +28,16 @@ public class WorkRequestProcessor {
     public ProcessingResult process(List<WorkRequest> batch) {
         // Null is treated as empty and still runs every stage, so the trace always has three entries.
         List<WorkRequest> requests = batch == null ? List.of() : batch;
+        return runFrom(validator.validate(requests));
+    }
 
-        StageResult validated = validator.validate(requests);
+    /** Processes a batch read from raw input, reporting unreadable fields as INVALID_VALUE. */
+    public ProcessingResult process(ParsedBatch batch) {
+        Objects.requireNonNull(batch, "batch");
+        return runFrom(validator.validate(batch.requests(), batch.invalidFieldsByIndex()));
+    }
+
+    private ProcessingResult runFrom(StageResult validated) {
         StageResult deduplicated = duplicateResolver.resolve(validated.requests());
         StageResult prioritized = sorter.sort(deduplicated.requests());
         List<StageResult> stages = List.of(validated, deduplicated, prioritized);

@@ -91,4 +91,12 @@ class SampleBatchTest {
 
         assertThat(escalated.requestedAt()).isEqualTo(Instant.parse("2026-10-20T08:15:00Z"));
     }
+
+    @Test
+    void exposesTheEscalationAsStructuredFieldsOnOneProblemOnly() {
+        assertThat(result.problems())
+                .filteredOn(problem -> problem.escalatedTo() != null)
+                .extracting(Problem::requestId, Problem::relatedRequestId, Problem::escalatedFrom, Problem::escalatedTo)
+                .containsExactly(tuple("REQ-108", "REQ-101", MEDIUM, CRITICAL));
+    }
 }

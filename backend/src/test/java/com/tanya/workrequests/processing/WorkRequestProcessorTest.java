@@ -1,5 +1,7 @@
 package com.tanya.workrequests.processing;
 
+import com.tanya.workrequests.domain.InvalidField;
+import com.tanya.workrequests.domain.ParsedBatch;
 import com.tanya.workrequests.domain.Problem;
 import com.tanya.workrequests.domain.ProblemCode;
 import com.tanya.workrequests.domain.ProcessingResult;
@@ -13,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static com.tanya.workrequests.domain.Priority.CRITICAL;
 import static com.tanya.workrequests.domain.Priority.HIGH;
@@ -170,5 +173,48 @@ class WorkRequestProcessorTest {
                 tuple("validate", 8, 6),
                 tuple("deduplicate", 6, 3),
                 tuple("prioritize", 3, 3));
+    }
+
+    @Test
+    void passesInvalidFieldsOfAParsedBatchToTheValidator() {
+        Map<Integer, List<InvalidField>> invalidFields = Map.of(2, List.of(new InvalidField("priority", "URGENT")));
+        ParsedBatch parsed = new ParsedBatch(batch, invalidFields);
+        when(validator.validate(parsed.requests(), invalidFields))
+                .thenReturn(new StageResult(validated, List.of(nullRequest), VALIDATE_TRACE));
+        when(duplicateResolver.resolve(validated)).thenReturn(new StageResult(deduplicated, List.of(duplicate), DEDUPLICATE_TRACE));
+        when(sorter.sort(deduplicated)).thenReturn(new StageResult(sorted, List.of(), PRIORITIZE_TRACE));
+
+        ProcessingResult result = new WorkRequestProcessor(validator, duplicateResolver, sorter).process(parsed);
+
+        InOrder inOrder = inOrder(validator, duplicateResolver, sorter);
+        inOrder.verify(validator).validate(parsed.requests(), invalidFields);
+        inOrder.verify(duplicateResolver).resolve(validated);
+        inOrder.verify(sorter).sort(deduplicated);
+        assertThat(result.accepted()).containsExactly(second);
+        assertThat(result.trace()).containsExactly(VALIDATE_TRACE, DEDUPLICATE_TRACE, PRIORITIZE_TRACE);
+    }
+
+    @Test
+    void reportsInvalidValuesFromAParsedBatchEndToEnd() {
+        WorkRequestProcessor processor = new WorkRequestProcessor(
+                new WorkRequestValidator(), new DuplicateResolver(new DescriptionNormalizer()), new WorkRequestSorter());
+        // Index 1 looks like a Critical duplicate of REQ-1, but its date is unreadable.
+        ParsedBatch parsed = new ParsedBatch(
+                Arrays.asList(
+                        request("REQ-1", "PUMP-7", MEDIUM, "2026-10-20T08:00:00Z", "Pump leaking"),
+                        request("REQ-2", "PUMP-7", CRITICAL, null, "Pump leaking"),
+                        null,
+                        request("REQ-4", "FAN-1", null, "2026-10-20T09:00:00Z", "Belt squeal")),
+                Map.of(1, List.of(new InvalidField("requestedAt", "yesterday")),
+                        3, List.of(new InvalidField("priority", "URGENT"))));
+
+        ProcessingResult result = processor.process(parsed);
+
+        assertThat(result.accepted()).extracting(WorkRequest::requestId, WorkRequest::priority)
+                .containsExactly(tuple("REQ-1", MEDIUM));
+        assertThat(result.problems()).extracting(Problem::inputIndex, Problem::code, Problem::message).containsExactly(
+                tuple(1, ProblemCode.INVALID_VALUE, "REQ-2 has invalid requestedAt 'yesterday'"),
+                tuple(2, ProblemCode.NULL_REQUEST, "Request is null"),
+                tuple(3, ProblemCode.INVALID_VALUE, "REQ-4 has invalid priority 'URGENT'"));
     }
 }
