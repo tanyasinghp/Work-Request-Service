@@ -1,0 +1,3 @@
+# Runtime: the Anthropic SDK (only needed for --llm anthropic) and schema validation.
+anthropic>=2.3,<3
+jsonschema>=4.26,<5

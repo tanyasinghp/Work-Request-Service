@@ -1,0 +1,19 @@
+[project]
+name = "agent-pipeline"
+version = "0.1.0"
+description = "Story → criteria → diff → independent tests → Maven gate → PR summary, for the Work Request Service."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["runs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001"]  # The prompts and messages use "→" on purpose.
