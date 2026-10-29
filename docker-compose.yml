@@ -5,6 +5,21 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Comma-separated exact origins; the web service will be added here later.
-      APP_CORS_ALLOWED_ORIGINS: http://localhost:5173
+      # Exact origins, comma-separated: the web container and the Vite dev server.
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-8081},http://localhost:5173
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      args:
+        # Empty: the browser calls /api on the web origin and nginx proxies it to the api service.
+        VITE_API_URL: ""
+    image: work-request-service-web:local
+    ports:
+      # Override with WEB_PORT if 8081 is taken; the CORS origin above follows it.
+      - "${WEB_PORT:-8081}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
