@@ -13,7 +13,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TreeMap;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -52,22 +53,29 @@ public class DuplicateResolver {
 
     private static List<IndexedRequest> removeConflicts(List<IndexedRequest> requests,
                                                         List<Problem> problems, List<String> notes) {
-        // TreeMap so conflict notes come out in requestId order whatever the input order.
         Map<String, List<IndexedRequest>> byRequestId = requests.stream()
                 .collect(Collectors.groupingBy(indexed -> indexed.request().requestId(),
-                        TreeMap::new, Collectors.toList()));
+                        LinkedHashMap::new, Collectors.toList()));
 
-        List<IndexedRequest> remaining = new ArrayList<>();
+        // TreeSet so conflict notes come out in requestId order whatever the input order.
+        Set<String> conflictingIds = new TreeSet<>();
         byRequestId.forEach((requestId, group) -> {
             if (hasConflict(group)) {
-                group.forEach(indexed -> problems.add(Problem.conflictingRequestId(indexed.inputIndex(), requestId)));
-                notes.add(requestId + " rejected: " + group.size()
-                        + " requests share this id with different content");
-            } else {
-                remaining.addAll(group);
+                conflictingIds.add(requestId);
             }
         });
-        return remaining;
+        for (String requestId : conflictingIds) {
+            List<IndexedRequest> group = byRequestId.get(requestId);
+            group.forEach(indexed -> problems.add(Problem.conflictingRequestId(indexed.inputIndex(), requestId)));
+            notes.add(requestId + " rejected: " + group.size()
+                    + " requests share this id with different content");
+        }
+
+        // Deliberately keeps input order: the survivor and escalation tiebreakers must be the
+        // only things deciding ties, not whatever order this step happens to leave behind.
+        return requests.stream()
+                .filter(indexed -> !conflictingIds.contains(indexed.request().requestId()))
+                .toList();
     }
 
     // Any difference in any field makes the whole group a conflict, even if some members
