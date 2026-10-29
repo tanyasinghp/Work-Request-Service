@@ -32,6 +32,8 @@ class OrderIndependenceTest {
     private static final long SHUFFLE_SEED = 42;
     private static final long GENERATOR_SEED = 2026;
     private static final Instant START = Instant.parse("2026-10-20T00:00:00Z");
+    // Far enough ahead that the system clock reads it as future for the life of this codebase.
+    private static final Instant FAR_FUTURE = Instant.parse("2099-01-01T00:00:00Z");
     private static final Priority[] PRIORITIES = Priority.values();
 
     private final WorkRequestProcessor processor = new WorkRequestProcessor(
@@ -55,7 +57,7 @@ class OrderIndependenceTest {
 
         ProcessingResult result = processElements(batch);
 
-        assertThat(batch).hasSize(200);
+        assertThat(batch).hasSize(201);
         assertThat(result.problems()).extracting(Problem::code).contains(ProblemCode.values());
         assertThat(result.problems()).extracting(Problem::message)
                 .anyMatch(message -> message.contains("priority escalated"))
@@ -92,10 +94,10 @@ class OrderIndependenceTest {
     }
 
     /**
-     * 200 requests built from a fixed seed: 100 distinct, 40 duplicates (some three-way, some
+     * 201 requests built from a fixed seed: 100 distinct, 40 duplicates (some three-way, some
      * tied on time), 15 exact repeats, 23 in conflict groups, 17 invalid (including unreadable
-     * priority and date values), 5 null. Times sit on a 15-minute grid so priority and time
-     * ties are common.
+     * priority and date values), 1 dated in the future, 5 null. Times sit on a 15-minute grid
+     * so priority and time ties are common.
      */
     private static List<Element> generatedBatch() {
         Random random = new Random(GENERATOR_SEED);
@@ -163,6 +165,9 @@ class OrderIndependenceTest {
                 default -> new WorkRequest(id, "BEQ-" + i, randomPriority(random), null, "Bad " + i);
             });
         }
+
+        // Otherwise valid, but dated in the future: rejected in validate, so it never reaches dedup.
+        batch.add(new WorkRequest("FUT-000", "FEQ-0", Priority.CRITICAL, FAR_FUTURE, "Future task"));
 
         for (int i = 0; i < 5; i++) {
             batch.add(null);

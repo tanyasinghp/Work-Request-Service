@@ -1,5 +1,6 @@
 package com.tanya.workrequests.domain;
 
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -68,6 +69,15 @@ public record Problem(int inputIndex,
     public static Problem conflictingRequestId(int inputIndex, String requestId) {
         return new Problem(inputIndex, requestId, ProblemCode.CONFLICTING_REQUEST_ID, null, null, null, null,
                 "Request id " + requestId + " is used by requests with different content");
+    }
+
+    /**
+     * A request dated after "now": the clock that produced it, or the request itself, is suspect.
+     * Only a parsed instant can be compared, so unreadable dates stay INVALID_VALUE.
+     */
+    public static Problem suspiciousTimestamp(int inputIndex, String requestId, Instant requestedAt) {
+        return new Problem(inputIndex, requestId, ProblemCode.SUSPICIOUS_TIMESTAMP, "requestedAt", null, null, null,
+                subject(requestId) + " has requestedAt " + requestedAt + " in the future");
     }
 
     private static String subject(String requestId) {
