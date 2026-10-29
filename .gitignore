@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+
+# Build output
+target/
+dist/
+node_modules/
+
+# Coverage output
+coverage/
+jacoco.exec
+*.exec
+
+# Secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
