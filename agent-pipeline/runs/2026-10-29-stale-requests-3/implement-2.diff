@@ -1,0 +1,218 @@
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+--- a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+@@ -1,9 +1,11 @@
+ package com.tanya.workrequests.domain;
+ 
+ public enum ProblemCode {
+     NULL_REQUEST,
+     MISSING_FIELD,
+     INVALID_VALUE,
+     DUPLICATE,
+-    CONFLICTING_REQUEST_ID
++    CONFLICTING_REQUEST_ID,
++    // Appended last so existing constants keep their declaration order.
++    STALE
+ }
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+--- a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+@@ -1,5 +1,7 @@
+ package com.tanya.workrequests.domain;
+ 
++import java.time.Duration;
++import java.time.Instant;
+ import java.util.Objects;
+ 
+ /**
+@@ -63,6 +65,16 @@ public record Problem(int inputIndex,
+     public static Problem conflictingRequestId(int inputIndex, String requestId) {
+         return new Problem(inputIndex, requestId, ProblemCode.CONFLICTING_REQUEST_ID, null, null, null, null,
+                 "Request id " + requestId + " is used by requests with different content");
+     }
+ 
++    /**
++     * A request whose {@code requestedAt} is older than the configured maximum age. The message
++     * quotes the age in whole days because that is how the threshold is configured.
++     */
++    public static Problem stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge) {
++        return new Problem(inputIndex, requestId, ProblemCode.STALE, "requestedAt", null, null, null,
++                subject(requestId) + " is stale: requestedAt " + requestedAt
++                        + " is more than " + maxAge.toDays() + " days old");
++    }
++
+     private static String subject(String requestId) {
+         return requestId == null ? "Request" : requestId;
+     }
+diff --git a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
+--- a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
++++ b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestValidator.java
+@@ -6,19 +6,52 @@ import com.tanya.workrequests.domain.ProblemCode;
+ import com.tanya.workrequests.domain.StageTrace;
+ import com.tanya.workrequests.domain.WorkRequest;
+ 
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
+ import java.util.ArrayList;
+ import java.util.Comparator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Objects;
+ import java.util.stream.Collectors;
+ 
+ /**
+  * Rejects null, incomplete, and unreadable requests. Every missing or invalid field is its
+  * own problem, so a request with two bad fields reports both. Blank strings count as missing.
++ *
++ * <p>When built with a {@link Clock} and a maximum age, a request whose {@code requestedAt} is
++ * older than that age is also rejected as STALE. Staleness is only checked for requests whose
++ * fields are all present and readable, so a STALE problem always carries a request id.
+  */
+ public class WorkRequestValidator {
+ 
+     static final String STAGE = "validate";
+ 
++    // A threshold below one day would make "n days old" messages meaningless.
++    private static final Duration MIN_MAX_AGE = Duration.ofDays(1);
++
++    private final Clock clock;
++    private final Duration maxAge;
++
++    /** Validates fields only; no staleness check. Kept for callers that have no clock. */
++    public WorkRequestValidator() {
++        this.clock = null;
++        this.maxAge = null;
++    }
++
++    public WorkRequestValidator(Clock clock, Duration maxAge) {
++        this.clock = Objects.requireNonNull(clock, "clock");
++        this.maxAge = Objects.requireNonNull(maxAge, "maxAge");
++        if (maxAge.compareTo(MIN_MAX_AGE) < 0) {
++            throw new IllegalArgumentException("maxAge must be at least 1 day");
++        }
++    }
++
+     public StageResult validate(List<WorkRequest> batch) {
+         return validate(batch, Map.of());
+     }
+@@ -28,22 +61,34 @@ public class WorkRequestValidator {
+      *        they are null in {@code batch} and are reported as INVALID_VALUE, not MISSING_FIELD
+      */
+     public StageResult validate(List<WorkRequest> batch, Map<Integer, List<InvalidField>> invalidFieldsByIndex) {
+         List<IndexedRequest> valid = new ArrayList<>();
+         List<Problem> problems = new ArrayList<>();
+         List<String> notes = new ArrayList<>();
++        // Read once per call so every request in the batch is judged against the same "now".
++        Instant staleCutoff = staleCutoff();
+ 
+         for (int index = 0; index < batch.size(); index++) {
+             WorkRequest request = batch.get(index);
+             List<InvalidField> invalidFields = invalidFieldsByIndex.getOrDefault(index, List.of());
+             List<Problem> requestProblems = problemsFor(index, request, invalidFields);
+-            if (requestProblems.isEmpty()) {
+-                valid.add(new IndexedRequest(index, request));
+-            } else {
++            if (!requestProblems.isEmpty()) {
+                 problems.addAll(requestProblems);
+                 notes.add(rejectionNote(request, requestProblems));
++                continue;
++            }
++            if (isStale(request, staleCutoff)) {
++                problems.add(Problem.stale(index, request.requestId(), request.requestedAt(), maxAge));
++                notes.add(request.requestId() + " rejected: stale");
++                continue;
+             }
++            valid.add(new IndexedRequest(index, request));
+         }
+         // Sorted, and free of input indices, so the trace is identical whatever the input order.
+         notes.sort(Comparator.naturalOrder());
+ 
+         StageTrace trace = new StageTrace(STAGE, batch.size(), valid.size(), notes);
+         return new StageResult(valid, problems, trace);
+     }
+ 
++    private Instant staleCutoff() {
++        return clock == null ? null : clock.instant().minus(maxAge);
++    }
++
++    /** Strictly older than the cutoff; a request exactly at the limit, or in the future, is fine. */
++    private static boolean isStale(WorkRequest request, Instant staleCutoff) {
++        return staleCutoff != null && request.requestedAt().isBefore(staleCutoff);
++    }
++
+     private static List<Problem> problemsFor(int index, WorkRequest request, List<InvalidField> invalidFields) {
+         if (request == null) {
+             return List.of(Problem.nullRequest(index));
+         }
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java b/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/tanya/workrequests/config/StalenessProperties.java
+@@ -0,0 +1,27 @@
++package com.tanya.workrequests.config;
++
++import org.springframework.boot.context.properties.ConfigurationProperties;
++import org.springframework.boot.context.properties.bind.DefaultValue;
++
++import java.time.Duration;
++import java.util.Objects;
++
++/**
++ * How old a request may be before it is rejected as stale. Validated here so a misconfigured
++ * threshold fails startup instead of silently rejecting every request.
++ */
++@ConfigurationProperties("app.staleness")
++public record StalenessProperties(@DefaultValue("30d") Duration maxAge) {
++
++    // Below one day the "n days old" problem message would always read "0 days".
++    private static final Duration MIN_MAX_AGE = Duration.ofDays(1);
++
++    public StalenessProperties {
++        Objects.requireNonNull(maxAge, "maxAge");
++        if (maxAge.compareTo(MIN_MAX_AGE) < 0) {
++            throw new IllegalArgumentException("app.staleness.max-age must be at least 1 day");
++        }
++    }
++}
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+--- a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
++++ b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+@@ -7,21 +7,31 @@ import com.tanya.workrequests.processing.WorkRequestSorter;
+ import com.tanya.workrequests.processing.WorkRequestValidator;
+ import org.springframework.context.annotation.Bean;
+ import org.springframework.context.annotation.Configuration;
+ 
++import java.time.Clock;
++
+ /**
+  * Wires the framework-free processing classes. Every stage is stateless, so one shared
+  * instance of each (Spring's default singleton scope) is safe across concurrent requests.
+  */
+ @Configuration(proxyBeanMethods = false)
+ public class ProcessingConfig {
+ 
++    /**
++     * The single source of "now" for processing, so tests can pin it with {@code Clock.fixed}.
++     */
++    @Bean
++    Clock clock() {
++        return Clock.systemUTC();
++    }
++
+     @Bean
+     DescriptionNormalizer descriptionNormalizer() {
+         return new DescriptionNormalizer();
+     }
+ 
+     @Bean
+-    WorkRequestValidator workRequestValidator() {
+-        return new WorkRequestValidator();
++    WorkRequestValidator workRequestValidator(Clock clock, StalenessProperties stalenessProperties) {
++        return new WorkRequestValidator(clock, stalenessProperties.maxAge());
+     }
+ 
+     @Bean
+     DuplicateResolver duplicateResolver(DescriptionNormalizer descriptionNormalizer) {
+         return new DuplicateResolver(descriptionNormalizer);
+     }

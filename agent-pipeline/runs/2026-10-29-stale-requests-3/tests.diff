@@ -1,0 +1,781 @@
+diff --git a/backend/src/test/java/com/tanya/workrequests/domain/StaleProblemTest.java b/backend/src/test/java/com/tanya/workrequests/domain/StaleProblemTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/domain/StaleProblemTest.java
+@@ -0,0 +1,73 @@
++package com.tanya.workrequests.domain;
++
++import org.junit.jupiter.api.Test;
++
++import java.time.Duration;
++import java.time.Instant;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The STALE problem code and the Problem.stale factory. */
++class StaleProblemTest {
++
++    private static final Instant REQUESTED_AT = Instant.parse("2026-09-01T08:00:00Z");
++
++    @Test
++    void listsStaleAsSixthAndLastProblemCode() {
++        assertThat(ProblemCode.values()).containsExactly(
++                ProblemCode.NULL_REQUEST,
++                ProblemCode.MISSING_FIELD,
++                ProblemCode.INVALID_VALUE,
++                ProblemCode.DUPLICATE,
++                ProblemCode.CONFLICTING_REQUEST_ID,
++                ProblemCode.STALE);
++    }
++
++    @Test
++    void staleFactoryKeepsInputIndexAndRequestId() {
++        Problem problem = Problem.stale(3, "R-7", REQUESTED_AT, Duration.ofDays(30));
++
++        assertThat(problem.inputIndex()).isEqualTo(3);
++        assertThat(problem.requestId()).isEqualTo("R-7");
++    }
++
++    @Test
++    void staleFactoryUsesStaleCodeAndRequestedAtField() {
++        Problem problem = Problem.stale(3, "R-7", REQUESTED_AT, Duration.ofDays(30));
++
++        assertThat(problem.code()).isEqualTo(ProblemCode.STALE);
++        assertThat(problem.field()).isEqualTo("requestedAt");
++    }
++
++    @Test
++    void staleFactoryLeavesRelationAndEscalationFieldsUnset() {
++        Problem problem = Problem.stale(3, "R-7", REQUESTED_AT, Duration.ofDays(30));
++
++        assertThat(problem.relatedRequestId()).isNull();
++        assertThat(problem.escalatedFrom()).isNull();
++        assertThat(problem.escalatedTo()).isNull();
++    }
++
++    @Test
++    void staleMessageNamesRequestIdTimestampAndMaxAgeInDays() {
++        Problem problem = Problem.stale(3, "R-7", REQUESTED_AT, Duration.ofDays(30));
++
++        assertThat(problem.message())
++                .isEqualTo("R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old");
++    }
++
++    @Test
++    void staleMessageTakesItsDayCountFromTheGivenMaxAge() {
++        Problem problem = Problem.stale(0, "R-9", REQUESTED_AT, Duration.ofDays(7));
++
++        assertThat(problem.message())
++                .isEqualTo("R-9 is stale: requestedAt 2026-09-01T08:00:00Z is more than 7 days old");
++    }
++
++    @Test
++    void staleMessageOmitsTheInputIndex() {
++        Problem problem = Problem.stale(42, "R-7", REQUESTED_AT, Duration.ofDays(30));
++
++        assertThat(problem.message()).doesNotContain("42");
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/StalenessValidationTest.java b/backend/src/test/java/com/tanya/workrequests/processing/StalenessValidationTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/processing/StalenessValidationTest.java
+@@ -0,0 +1,217 @@
++package com.tanya.workrequests.processing;
++
++import com.tanya.workrequests.domain.InvalidField;
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.WorkRequest;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.Collections;
++import java.util.List;
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
++import static org.assertj.core.api.Assertions.assertThatNullPointerException;
++import static org.assertj.core.api.Assertions.tuple;
++import static org.mockito.BDDMockito.given;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++
++/**
++ * Staleness checking in the validator: a request older than maxAge is reported as a problem
++ * and kept out of the queue, while the no-argument validator keeps its old behaviour.
++ */
++class StalenessValidationTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T08:00:00Z");
++    private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
++    private static final Duration THIRTY_DAYS = Duration.ofDays(30);
++    private static final String NINETY_DAYS_OLD = "2026-07-22T08:00:00Z";
++
++    private final WorkRequestValidator validator = new WorkRequestValidator(FIXED_CLOCK, THIRTY_DAYS);
++
++    @Test
++    void keepsStaleRequestOutOfTheValidatedQueue() {
++        StageResult result = validator.validate(staleAndRecentBatch());
++
++        assertThat(result.requests())
++                .extracting(indexed -> indexed.request().requestId())
++                .containsExactly("R-2");
++    }
++
++    @Test
++    void reportsOneStaleProblemForTheStaleRequestAtItsInputIndex() {
++        StageResult result = validator.validate(staleAndRecentBatch());
++
++        assertThat(result.problems())
++                .extracting(Problem::inputIndex, Problem::requestId, Problem::code, Problem::field)
++                .containsExactly(tuple(0, "R-1", ProblemCode.STALE, "requestedAt"));
++    }
++
++    @Test
++    void acceptsRequestExactlyAtTheMaxAge() {
++        StageResult result = validator.validate(boundaryBatch());
++
++        assertThat(result.requests())
++                .extracting(indexed -> indexed.request().requestId())
++                .contains("R-EXACT");
++    }
++
++    @Test
++    void flagsOnlyTheRequestOneSecondOlderThanTheMaxAge() {
++        StageResult result = validator.validate(boundaryBatch());
++
++        assertThat(result.problems())
++                .extracting(Problem::requestId, Problem::code)
++                .containsExactly(tuple("R-OLDER", ProblemCode.STALE));
++    }
++
++    @Test
++    void acceptsRequestDatedInTheFuture() {
++        StageResult result = validator.validate(boundaryBatch());
++
++        assertThat(result.requests())
++                .extracting(indexed -> indexed.request().requestId())
++                .contains("R-FUTURE");
++    }
++
++    @Test
++    void readsTheClockOncePerValidateCallSoEveryRequestSharesOneNow() {
++        Clock clock = mock(Clock.class);
++        given(clock.instant()).willReturn(NOW);
++
++        new WorkRequestValidator(clock, THIRTY_DAYS).validate(boundaryBatch());
++
++        verify(clock, times(1)).instant();
++    }
++
++    @Test
++    void reportsOnlyNullRequestForANullElement() {
++        StageResult result = validator.validate(Collections.singletonList(null));
++
++        assertThat(result.problems())
++                .extracting(Problem::code)
++                .containsExactly(ProblemCode.NULL_REQUEST);
++    }
++
++    @Test
++    void reportsOnlyTheMissingFieldForAnOldRequestThatIsAlsoIncomplete() {
++        StageResult result = validator.validate(List.of(
++                TestRequests.request("R-1", null, Priority.MEDIUM, NINETY_DAYS_OLD, "Old and incomplete")));
++
++        assertThat(result.problems())
++                .extracting(Problem::code, Problem::field)
++                .containsExactly(tuple(ProblemCode.MISSING_FIELD, "equipmentId"));
++    }
++
++    @Test
++    void reportsOnlyTheInvalidValueForAnOldRequestWithAnUnreadableRequestedAt() {
++        StageResult result = validator.validate(
++                List.of(TestRequests.request("R-1", "EQ-1", Priority.MEDIUM, NINETY_DAYS_OLD, "Old work")),
++                Map.of(0, List.of(new InvalidField("requestedAt", "90-days-ago"))));
++
++        assertThat(result.problems())
++                .extracting(Problem::code, Problem::field)
++                .containsExactly(tuple(ProblemCode.INVALID_VALUE, "requestedAt"));
++    }
++
++    @Test
++    void givesEveryStaleProblemANonNullRequestId() {
++        StageResult result = validator.validate(mixedRejectionBatch());
++
++        assertThat(result.problems())
++                .filteredOn(problem -> problem.code() == ProblemCode.STALE)
++                .allSatisfy(problem -> assertThat(problem.requestId()).isNotNull());
++    }
++
++    @Test
++    void tracesOneSortedNotePerRejectedRequestIncludingStaleOnes() {
++        StageResult result = validator.validate(mixedRejectionBatch());
++
++        assertThat(result.trace().notes())
++                .containsExactly("R-3 rejected: missing description", "R-7 rejected: stale");
++    }
++
++    @Test
++    void tracesValidateCountsWithStaleRequestsLeftOutOfTheOutput() {
++        StageResult result = validator.validate(mixedRejectionBatch());
++
++        assertThat(result.trace().stage()).isEqualTo("validate");
++        assertThat(result.trace().in()).isEqualTo(3);
++        assertThat(result.trace().out()).isEqualTo(1);
++    }
++
++    @Test
++    void noArgumentValidatorAcceptsYearsOldRequests() {
++        StageResult result = new WorkRequestValidator().validate(yearsOldBatch());
++
++        assertThat(result.problems()).isEmpty();
++        assertThat(result.requests()).hasSize(2);
++    }
++
++    @Test
++    void processorBuiltFromTheExistingConstructorsAcceptsYearsOldRequests() {
++        WorkRequestProcessor processor = new WorkRequestProcessor(new WorkRequestValidator(),
++                new DuplicateResolver(new DescriptionNormalizer()), new WorkRequestSorter());
++
++        ProcessingResult result = processor.process(yearsOldBatch());
++
++        assertThat(result.problems()).isEmpty();
++        assertThat(result.accepted()).hasSize(2);
++    }
++
++    @Test
++    void rejectsANullClock() {
++        assertThatNullPointerException()
++                .isThrownBy(() -> new WorkRequestValidator(null, THIRTY_DAYS))
++                .withMessageContaining("clock");
++    }
++
++    @Test
++    void rejectsANullMaxAge() {
++        assertThatNullPointerException()
++                .isThrownBy(() -> new WorkRequestValidator(Clock.systemUTC(), null))
++                .withMessageContaining("maxAge");
++    }
++
++    @Test
++    void rejectsAMaxAgeShorterThanOneDay() {
++        assertThatExceptionOfType(IllegalArgumentException.class)
++                .isThrownBy(() -> new WorkRequestValidator(FIXED_CLOCK, Duration.ofHours(23)));
++    }
++
++    private static List<WorkRequest> staleAndRecentBatch() {
++        return List.of(
++                TestRequests.request("R-1", "EQ-1", Priority.MEDIUM, "2026-09-01T08:00:00Z", "Old work"),
++                TestRequests.request("R-2", "EQ-2", Priority.MEDIUM, "2026-10-19T08:00:00Z", "Recent work"));
++    }
++
++    /** Exactly at the limit, one second past it, and dated in the future. */
++    private static List<WorkRequest> boundaryBatch() {
++        return List.of(
++                TestRequests.request("R-EXACT", "EQ-1", Priority.MEDIUM, "2026-09-20T08:00:00Z", "Thirty days old"),
++                TestRequests.request("R-OLDER", "EQ-2", Priority.MEDIUM, "2026-09-20T07:59:59Z", "One second older"),
++                TestRequests.request("R-FUTURE", "EQ-3", Priority.MEDIUM, "2026-11-01T08:00:00Z", "Dated ahead"));
++    }
++
++    private static List<WorkRequest> mixedRejectionBatch() {
++        return List.of(
++                TestRequests.valid("R-1"),
++                TestRequests.request("R-3", "EQ-3", Priority.MEDIUM, "2026-10-19T08:00:00Z", " "),
++                TestRequests.request("R-7", "EQ-7", Priority.HIGH, NINETY_DAYS_OLD, "Overdue inspection"));
++    }
++
++    private static List<WorkRequest> yearsOldBatch() {
++        return List.of(
++                TestRequests.request("R-1", "EQ-1", Priority.MEDIUM, "2019-01-01T08:00:00Z", "Ancient work"),
++                TestRequests.request("R-2", "EQ-2", Priority.HIGH, "2020-06-30T08:00:00Z", "Older work"));
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/StalenessOrderIndependenceTest.java b/backend/src/test/java/com/tanya/workrequests/processing/StalenessOrderIndependenceTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/processing/StalenessOrderIndependenceTest.java
+@@ -0,0 +1,169 @@
++package com.tanya.workrequests.processing;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.StageTrace;
++import com.tanya.workrequests.domain.WorkRequest;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++import java.util.Random;
++import java.util.Set;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.tuple;
++
++/**
++ * A staleness-aware pipeline stays order independent: the stale request is dropped in the
++ * validate stage, so it can never escalate the duplicate it would otherwise have matched.
++ */
++class StalenessOrderIndependenceTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T08:00:00Z");
++    private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
++    private static final String NINETY_DAYS_OLD = "2026-07-22T08:00:00Z";
++    private static final int RUNS = 100;
++    private static final Set<ProblemCode> VALIDATE_CODES = Set.of(ProblemCode.NULL_REQUEST,
++            ProblemCode.MISSING_FIELD, ProblemCode.INVALID_VALUE, ProblemCode.STALE);
++
++    private final WorkRequestProcessor processor = new WorkRequestProcessor(
++            new WorkRequestValidator(FIXED_CLOCK, Duration.ofDays(30)),
++            new DuplicateResolver(new DescriptionNormalizer()),
++            new WorkRequestSorter());
++
++    @Test
++    void producesTheSameQueueForEveryInputOrder() {
++        List<List<String>> queues = shuffledRuns().stream()
++                .map(StalenessOrderIndependenceTest::queueOf)
++                .toList();
++
++        assertThat(queues).containsOnly(queues.get(0));
++    }
++
++    @Test
++    void producesTheSameProblemsForEveryInputOrder() {
++        List<List<String>> problems = shuffledRuns().stream()
++                .map(StalenessOrderIndependenceTest::problemsOf)
++                .toList();
++
++        assertThat(problems).containsOnly(problems.get(0));
++    }
++
++    @Test
++    void producesTheSameTraceForEveryInputOrder() {
++        List<List<String>> traces = shuffledRuns().stream()
++                .map(StalenessOrderIndependenceTest::traceOf)
++                .toList();
++
++        assertThat(traces).containsOnly(traces.get(0));
++    }
++
++    @Test
++    void reportsTheStaleTwinOnlyAsStaleAndNeverAsDuplicate() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems())
++                .filteredOn(problem -> "R-2".equals(problem.requestId()))
++                .extracting(Problem::code)
++                .containsExactly(ProblemCode.STALE);
++    }
++
++    @Test
++    void keepsTheRecentTwinInTheQueueAtItsOwnPriority() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.accepted())
++                .extracting(WorkRequest::requestId, WorkRequest::priority)
++                .contains(tuple("R-1", Priority.MEDIUM));
++    }
++
++    @Test
++    void escalatesNothingWhenTheOnlyHigherPriorityTwinIsStale() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems()).allSatisfy(problem -> assertThat(problem.escalatedTo()).isNull());
++    }
++
++    @Test
++    void keepsTheThreeStageTraceWithValidateOutputFeedingDeduplicateInput() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.trace()).extracting(StageTrace::stage)
++                .containsExactly("validate", "deduplicate", "prioritize");
++        assertThat(result.trace().get(0).out()).isEqualTo(result.trace().get(1).in());
++    }
++
++    @Test
++    void listsValidateStageProblemsBeforeDeduplicateStageProblems() {
++        List<ProblemCode> codes = processor.process(batch()).problems().stream().map(Problem::code).toList();
++
++        long validateProblems = codes.stream().filter(VALIDATE_CODES::contains).count();
++        assertThat(codes.subList(0, (int) validateProblems)).allMatch(VALIDATE_CODES::contains);
++    }
++
++    @Test
++    void ordersValidateStageProblemsByInputIndexWithStaleProblemsInterleaved() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems())
++                .filteredOn(problem -> VALIDATE_CODES.contains(problem.code()))
++                .extracting(Problem::requestId, Problem::code)
++                .containsExactly(tuple("R-2", ProblemCode.STALE),
++                        tuple("R-5", ProblemCode.MISSING_FIELD),
++                        tuple("R-6", ProblemCode.STALE),
++                        tuple(null, ProblemCode.NULL_REQUEST));
++    }
++
++    private List<ProcessingResult> shuffledRuns() {
++        Random random = new Random(20261020L);
++        List<ProcessingResult> results = new ArrayList<>();
++        for (int run = 0; run < RUNS; run++) {
++            List<WorkRequest> shuffled = batch();
++            Collections.shuffle(shuffled, random);
++            results.add(processor.process(shuffled));
++        }
++        return results;
++    }
++
++    private static List<String> queueOf(ProcessingResult result) {
++        return result.accepted().stream()
++                .map(request -> request.requestId() + ":" + request.priority())
++                .toList();
++    }
++
++    /** Input indices move with the shuffle, so they are left out and the rest is sorted. */
++    private static List<String> problemsOf(ProcessingResult result) {
++        return result.problems().stream()
++                .map(problem -> problem.code() + "|" + problem.requestId() + "|" + problem.field()
++                        + "|" + problem.relatedRequestId() + "|" + problem.message())
++                .sorted()
++                .toList();
++    }
++
++    private static List<String> traceOf(ProcessingResult result) {
++        return result.trace().stream()
++                .map(stage -> stage.stage() + ":" + stage.in() + "->" + stage.out() + stage.notes())
++                .toList();
++    }
++
++    /** Recent MEDIUM R-1 and 90-day-old CRITICAL R-2 are twins; R-3/R-4 are a plain duplicate pair. */
++    private static List<WorkRequest> batch() {
++        return new ArrayList<>(Arrays.asList(
++                TestRequests.request("R-1", "EQ-9", Priority.MEDIUM, "2026-10-19T08:00:00Z", "Pump leaking oil"),
++                TestRequests.request("R-2", "EQ-9", Priority.CRITICAL, NINETY_DAYS_OLD, "Pump leaking oil"),
++                TestRequests.request("R-3", "EQ-5", Priority.HIGH, "2026-10-10T08:00:00Z", "Replace filter"),
++                TestRequests.request("R-4", "EQ-5", Priority.HIGH, "2026-10-12T08:00:00Z", "Replace filter"),
++                TestRequests.request("R-5", null, Priority.LOW, "2026-10-18T08:00:00Z", "No equipment id"),
++                TestRequests.request("R-6", "EQ-6", Priority.HIGH, NINETY_DAYS_OLD, "Overdue inspection"),
++                null));
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/StalenessPropertiesTest.java b/backend/src/test/java/com/tanya/workrequests/config/StalenessPropertiesTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/StalenessPropertiesTest.java
+@@ -0,0 +1,54 @@
++package com.tanya.workrequests.config;
++
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.context.properties.EnableConfigurationProperties;
++import org.springframework.boot.test.context.runner.ApplicationContextRunner;
++import org.springframework.context.annotation.Configuration;
++
++import java.time.Duration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** Binding of app.staleness.max-age, including its default and its one-day floor. */
++class StalenessPropertiesTest {
++
++    private final ApplicationContextRunner runner = new ApplicationContextRunner()
++            .withUserConfiguration(EnableStaleness.class);
++
++    @Test
++    void maxAgeDefaultsToThirtyDaysWhenThePropertyIsAbsent() {
++        runner.run(context -> assertThat(context.getBean(StalenessProperties.class).maxAge())
++                .isEqualTo(Duration.ofDays(30)));
++    }
++
++    @Test
++    void bindsMaxAgeFromTheProperty() {
++        runner.withPropertyValues("app.staleness.max-age=7d")
++                .run(context -> assertThat(context.getBean(StalenessProperties.class).maxAge())
++                        .isEqualTo(Duration.ofDays(7)));
++    }
++
++    @Test
++    void failsStartupWhenMaxAgeIsZero() {
++        runner.withPropertyValues("app.staleness.max-age=0d").run(context -> {
++            assertThat(context).hasFailed();
++            assertThat(context.getStartupFailure())
++                    .hasStackTraceContaining("app.staleness.max-age must be at least 1 day")
++                    .rootCause().isInstanceOf(IllegalArgumentException.class);
++        });
++    }
++
++    @Test
++    void failsStartupWhenMaxAgeIsUnderOneDay() {
++        runner.withPropertyValues("app.staleness.max-age=23h").run(context -> {
++            assertThat(context).hasFailed();
++            assertThat(context.getStartupFailure())
++                    .hasStackTraceContaining("app.staleness.max-age must be at least 1 day");
++        });
++    }
++
++    @Configuration(proxyBeanMethods = false)
++    @EnableConfigurationProperties(StalenessProperties.class)
++    static class EnableStaleness {
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/ClockBeanTest.java b/backend/src/test/java/com/tanya/workrequests/config/ClockBeanTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/ClockBeanTest.java
+@@ -0,0 +1,38 @@
++package com.tanya.workrequests.config;
++
++import com.tanya.workrequests.processing.WorkRequestValidator;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.context.properties.EnableConfigurationProperties;
++import org.springframework.boot.test.context.runner.ApplicationContextRunner;
++import org.springframework.context.annotation.Configuration;
++
++import java.time.Clock;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The Clock bean ProcessingConfig exposes so tests can replace "now". */
++class ClockBeanTest {
++
++    private final ApplicationContextRunner runner = new ApplicationContextRunner()
++            .withUserConfiguration(EnableStaleness.class, ProcessingConfig.class);
++
++    @Test
++    void exposesExactlyOneClockBeanNamedClock() {
++        runner.run(context -> assertThat(context.getBeanNamesForType(Clock.class)).containsExactly("clock"));
++    }
++
++    @Test
++    void clockBeanDefaultsToTheSystemUtcClock() {
++        runner.run(context -> assertThat(context.getBean(Clock.class)).isEqualTo(Clock.systemUTC()));
++    }
++
++    @Test
++    void buildsASingleWorkRequestValidatorBean() {
++        runner.run(context -> assertThat(context).hasSingleBean(WorkRequestValidator.class));
++    }
++
++    @Configuration(proxyBeanMethods = false)
++    @EnableConfigurationProperties(StalenessProperties.class)
++    static class EnableStaleness {
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/StaleRequestWiringTest.java b/backend/src/test/java/com/tanya/workrequests/config/StaleRequestWiringTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/StaleRequestWiringTest.java
+@@ -0,0 +1,76 @@
++package com.tanya.workrequests.config;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.WorkRequestProcessor;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.context.TestConfiguration;
++import org.springframework.context.annotation.Bean;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.tuple;
++
++/**
++ * The wired pipeline reads "now" from the Clock bean and the threshold from app.staleness,
++ * so replacing the clock in a test is enough to make a request stale.
++ */
++@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
++class StaleRequestWiringTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T08:00:00Z");
++
++    @Autowired
++    private WorkRequestProcessor processor;
++
++    @Autowired
++    private StalenessProperties stalenessProperties;
++
++    @Test
++    void defaultsTheConfiguredMaxAgeToThirtyDays() {
++        assertThat(stalenessProperties.maxAge()).isEqualTo(Duration.ofDays(30));
++    }
++
++    @Test
++    void reportsAStaleProblemForARequestOlderThanThirtyDaysBeforeTheClock() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems())
++                .extracting(Problem::requestId, Problem::code, Problem::field)
++                .contains(tuple("R-OLD", ProblemCode.STALE, "requestedAt"));
++    }
++
++    @Test
++    void leavesTheStaleRequestOutOfTheQueue() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.accepted())
++                .extracting(WorkRequest::requestId)
++                .containsExactly("R-NEW");
++    }
++
++    private static List<WorkRequest> batch() {
++        return List.of(
++                new WorkRequest("R-NEW", "EQ-1", Priority.MEDIUM, Instant.parse("2026-10-19T08:00:00Z"), "Recent work"),
++                new WorkRequest("R-OLD", "EQ-2", Priority.HIGH, Instant.parse("2026-07-22T08:00:00Z"), "Old work"));
++    }
++
++    @TestConfiguration(proxyBeanMethods = false)
++    static class FixedClockConfig {
++
++        @Bean
++        Clock clock() {
++            return Clock.fixed(NOW, ZoneOffset.UTC);
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/ConfiguredStalenessMaxAgeWiringTest.java b/backend/src/test/java/com/tanya/workrequests/config/ConfiguredStalenessMaxAgeWiringTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/ConfiguredStalenessMaxAgeWiringTest.java
+@@ -0,0 +1,66 @@
++package com.tanya.workrequests.config;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.WorkRequestProcessor;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.context.TestConfiguration;
++import org.springframework.context.annotation.Bean;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.tuple;
++
++/** The configured threshold, not a hard-coded 30 days, decides what counts as stale. */
++@SpringBootTest(properties = {"spring.main.allow-bean-definition-overriding=true",
++        "app.staleness.max-age=7d"})
++class ConfiguredStalenessMaxAgeWiringTest {
++
++    private static final Instant NOW = Instant.parse("2026-10-20T08:00:00Z");
++
++    @Autowired
++    private WorkRequestProcessor processor;
++
++    @Test
++    void flagsARequestOlderThanTheConfiguredSevenDays() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.problems())
++                .extracting(Problem::requestId, Problem::code)
++                .containsExactly(tuple("R-EIGHT-DAYS", ProblemCode.STALE));
++    }
++
++    @Test
++    void acceptsARequestYoungerThanTheConfiguredSevenDays() {
++        ProcessingResult result = processor.process(batch());
++
++        assertThat(result.accepted())
++                .extracting(WorkRequest::requestId)
++                .containsExactly("R-SIX-DAYS");
++    }
++
++    private static List<WorkRequest> batch() {
++        return List.of(
++                new WorkRequest("R-SIX-DAYS", "EQ-1", Priority.MEDIUM, NOW.minus(Duration.ofDays(6)), "Recent work"),
++                new WorkRequest("R-EIGHT-DAYS", "EQ-2", Priority.HIGH, NOW.minus(Duration.ofDays(8)), "Old work"));
++    }
++
++    @TestConfiguration(proxyBeanMethods = false)
++    static class FixedClockConfig {
++
++        @Bean
++        Clock clock() {
++            return Clock.fixed(NOW, ZoneOffset.UTC);
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/api/StaleProblemMetricsTest.java b/backend/src/test/java/com/tanya/workrequests/api/StaleProblemMetricsTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/api/StaleProblemMetricsTest.java
+@@ -0,0 +1,48 @@
++package com.tanya.workrequests.api;
++
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.StageTrace;
++import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
++import org.junit.jupiter.api.Test;
++
++import java.time.Duration;
++import java.time.Instant;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The STALE problem code gets its own counter, following the existing per-code naming. */
++class StaleProblemMetricsTest {
++
++    private static final Instant REQUESTED_AT = Instant.parse("2026-07-22T08:00:00Z");
++
++    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
++    private final BatchObserver observer = new BatchObserver(registry);
++
++    @Test
++    void registersTheStaleRejectionCounterBeforeAnyStaleProblemArrives() {
++        assertThat(registry.find("workrequests.rejected").tag("code", "STALE").counter()).isNotNull();
++    }
++
++    @Test
++    void countsOneStaleRejectionPerStaleProblem() {
++        ProcessingResult result = new ProcessingResult(List.of(),
++                List.of(staleProblem(0, "R-1"), staleProblem(1, "R-2")), emptyTrace());
++
++        observer.observe(2, () -> result);
++
++        assertThat(registry.get("workrequests.rejected").tag("code", "STALE").counter().count())
++                .isEqualTo(2.0);
++    }
++
++    private static Problem staleProblem(int inputIndex, String requestId) {
++        return Problem.stale(inputIndex, requestId, REQUESTED_AT, Duration.ofDays(30));
++    }
++
++    private static List<StageTrace> emptyTrace() {
++        return List.of(new StageTrace("validate", 2, 0, List.of()),
++                new StageTrace("deduplicate", 0, 0, List.of()),
++                new StageTrace("prioritize", 0, 0, List.of()));
++    }
++}

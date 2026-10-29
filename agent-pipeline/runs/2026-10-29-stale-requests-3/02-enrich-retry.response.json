@@ -1,0 +1,226 @@
+{
+  "model": "claude-opus-5",
+  "costUsd": 0.225877,
+  "text": "{\"title\":\"Flag requests older than 30 days as stale\",\"criteria\":[{\"given\":\"the ProblemCode enum\",\"when\":\"its values are listed\",\"then\":\"a sixth constant STALE exists, appended last so existing constants keep their order: NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE\"},{\"given\":\"the new static factory Problem.stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge)\",\"when\":\"called with 3, \\\"R-7\\\", 2026-09-01T08:00:00Z and Duration.ofDays(30)\",\"then\":\"it returns a Problem with inputIndex 3, requestId \\\"R-7\\\", code STALE, field \\\"requestedAt\\\", null relatedRequestId/escalatedFrom/escalatedTo and message exactly \\\"R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old\\\" (day count from maxAge.toDays(); no input index in the message)\"},{\"given\":\"a validator built with the new constructor WorkRequestValidator(Clock clock, Duration maxAge) using Clock.fixed(2026-10-20T08:00:00Z, UTC) and Duration.ofDays(30)\",\"when\":\"validate is called with otherwise valid R-1 requestedAt 2026-09-01T08:00:00Z and R-2 requestedAt 2026-10-19T08:00:00Z\",\"then\":\"StageResult.requests holds only R-2 and problems hold exactly one STALE problem for R-1 at its input index: a stale request is both reported as a problem and kept out of the queue\"},{\"given\":\"the same validator (fixed clock, 30 days), with clock.instant() read once per validate call so all requests share one \\\"now\\\"\",\"when\":\"validate is called with requests requestedAt 2026-09-20T08:00:00Z (exactly 30 days), 2026-09-20T07:59:59Z (one second older) and 2026-11-01T08:00:00Z (future)\",\"then\":\"only the one-second-older request is STALE; staleness is strictly requestedAt.isBefore(now.minus(maxAge)), and future dates are accepted with no problem\"},{\"given\":\"a validator with a fixed clock and 30 day max age\",\"when\":\"validate is called with (a) a null element, (b) a 90-day-old request also missing equipmentId, (c) a 90-day-old request whose requestedAt is reported unreadable via invalidFieldsByIndex\",\"then\":\"(a) yields only NULL_REQUEST, (b) only the MISSING_FIELD problem for equipmentId, (c) only the INVALID_VALUE problem for requestedAt \u2014 field checks run first and a request with any field problem is never checked for staleness, so a STALE problem always has a non-null requestId\"},{\"given\":\"a validator with Clock.fixed(2026-10-20T08:00:00Z, UTC) and 30 days\",\"when\":\"validate is called with 3 requests of which R-7 is 90 days old and R-3 is missing description\",\"then\":\"the StageTrace is stage \\\"validate\\\", in 3, out 1, notes exactly [\\\"R-3 rejected: missing description\\\", \\\"R-7 rejected: stale\\\"]: one naturally sorted note per rejected request, stale notes read \\\"<requestId> rejected: stale\\\" and contain no input index\"},{\"given\":\"the preserved no-argument constructor new WorkRequestValidator() and the other existing constructors of DuplicateResolver, WorkRequestSorter and WorkRequestProcessor\",\"when\":\"a batch of years-old but otherwise valid requests is validated through new WorkRequestValidator()\",\"then\":\"no STALE problem is produced and every request is accepted \u2014 the no-arg constructor performs no staleness check, so existing tests including SampleBatchTest's 13 \u2192 10 \u2192 6 counts are unaffected; new WorkRequestValidator(null, Duration.ofDays(30)) and new WorkRequestValidator(Clock.systemUTC(), null) throw NullPointerException (\\\"clock\\\", \\\"maxAge\\\") and a maxAge under one day throws IllegalArgumentException\"},{\"given\":\"a new @ConfigurationProperties(\\\"app.staleness\\\") record StalenessProperties(@DefaultValue(\\\"30d\\\") Duration maxAge) with the default also written in application.yml\",\"when\":\"the context starts with no app.staleness property, then with app.staleness.max-age=7d, then with app.staleness.max-age=0d\",\"then\":\"maxAge binds to Duration.ofDays(30), then Duration.ofDays(7); 0d or any value under one day fails startup with IllegalArgumentException containing \\\"app.staleness.max-age must be at least 1 day\\\"\"},{\"given\":\"ProcessingConfig\",\"when\":\"the Spring context starts\",\"then\":\"it exposes exactly one java.time.Clock bean named \\\"clock\\\" defaulting to Clock.systemUTC() (replaceable by Clock.fixed(...) in tests) and builds the WorkRequestValidator bean from that Clock and StalenessProperties.maxAge, so a batch posted to the API containing a request requestedAt more than 30 days before the clock returns a ProblemDto with code \\\"STALE\\\" and field \\\"requestedAt\\\" and omits that request from the queue\"},{\"given\":\"a processor built from a staleness-aware validator (fixed clock, 30 days), the real DuplicateResolver and WorkRequestSorter, and a batch where recent MEDIUM R-1 and 90-day-old CRITICAL R-2 share equipmentId and normalized description, alongside invalid requests and duplicates\",\"when\":\"the batch is processed 100 times in shuffled order\",\"then\":\"every run gives the identical queue, problems and trace: R-2 produces only a STALE problem with no DUPLICATE problem, R-1 stays in the queue at MEDIUM with no escalation, the trace still has exactly three entries validate/deduplicate/prioritize with validate out == deduplicate in, validate-stage problems (stale and field problems interleaved by input index) precede deduplicate-stage problems, and BatchObserver has a counter for STALE following the existing per-ProblemCode naming scheme that increments once per stale problem\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestValidator\",\"StalenessProperties\",\"ProcessingConfig\",\"BatchObserver\"],\"outOfScope\":[\"Changing sample-batch.json or the pinned SampleBatchTest expectations\",\"Flagging requests whose requestedAt is in the future, or any clock-skew tolerance\",\"Marking stale requests as a non-blocking warning that still enters the queue\",\"A per-priority or per-equipment staleness threshold\",\"Re-checking staleness in the deduplicate or prioritize stages, or a new API field/endpoint for stale counts\",\"Replacing Instant.now() usages elsewhere in the codebase with the new Clock bean\"]}",
+  "data": {
+    "title": "Flag requests older than 30 days as stale",
+    "criteria": [
+      {
+        "given": "the ProblemCode enum",
+        "when": "its values are listed",
+        "then": "a sixth constant STALE exists, appended last so existing constants keep their order: NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE"
+      },
+      {
+        "given": "the new static factory Problem.stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge)",
+        "when": "called with 3, \"R-7\", 2026-09-01T08:00:00Z and Duration.ofDays(30)",
+        "then": "it returns a Problem with inputIndex 3, requestId \"R-7\", code STALE, field \"requestedAt\", null relatedRequestId/escalatedFrom/escalatedTo and message exactly \"R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old\" (day count from maxAge.toDays(); no input index in the message)"
+      },
+      {
+        "given": "a validator built with the new constructor WorkRequestValidator(Clock clock, Duration maxAge) using Clock.fixed(2026-10-20T08:00:00Z, UTC) and Duration.ofDays(30)",
+        "when": "validate is called with otherwise valid R-1 requestedAt 2026-09-01T08:00:00Z and R-2 requestedAt 2026-10-19T08:00:00Z",
+        "then": "StageResult.requests holds only R-2 and problems hold exactly one STALE problem for R-1 at its input index: a stale request is both reported as a problem and kept out of the queue"
+      },
+      {
+        "given": "the same validator (fixed clock, 30 days), with clock.instant() read once per validate call so all requests share one \"now\"",
+        "when": "validate is called with requests requestedAt 2026-09-20T08:00:00Z (exactly 30 days), 2026-09-20T07:59:59Z (one second older) and 2026-11-01T08:00:00Z (future)",
+        "then": "only the one-second-older request is STALE; staleness is strictly requestedAt.isBefore(now.minus(maxAge)), and future dates are accepted with no problem"
+      },
+      {
+        "given": "a validator with a fixed clock and 30 day max age",
+        "when": "validate is called with (a) a null element, (b) a 90-day-old request also missing equipmentId, (c) a 90-day-old request whose requestedAt is reported unreadable via invalidFieldsByIndex",
+        "then": "(a) yields only NULL_REQUEST, (b) only the MISSING_FIELD problem for equipmentId, (c) only the INVALID_VALUE problem for requestedAt \u2014 field checks run first and a request with any field problem is never checked for staleness, so a STALE problem always has a non-null requestId"
+      },
+      {
+        "given": "a validator with Clock.fixed(2026-10-20T08:00:00Z, UTC) and 30 days",
+        "when": "validate is called with 3 requests of which R-7 is 90 days old and R-3 is missing description",
+        "then": "the StageTrace is stage \"validate\", in 3, out 1, notes exactly [\"R-3 rejected: missing description\", \"R-7 rejected: stale\"]: one naturally sorted note per rejected request, stale notes read \"<requestId> rejected: stale\" and contain no input index"
+      },
+      {
+        "given": "the preserved no-argument constructor new WorkRequestValidator() and the other existing constructors of DuplicateResolver, WorkRequestSorter and WorkRequestProcessor",
+        "when": "a batch of years-old but otherwise valid requests is validated through new WorkRequestValidator()",
+        "then": "no STALE problem is produced and every request is accepted \u2014 the no-arg constructor performs no staleness check, so existing tests including SampleBatchTest's 13 \u2192 10 \u2192 6 counts are unaffected; new WorkRequestValidator(null, Duration.ofDays(30)) and new WorkRequestValidator(Clock.systemUTC(), null) throw NullPointerException (\"clock\", \"maxAge\") and a maxAge under one day throws IllegalArgumentException"
+      },
+      {
+        "given": "a new @ConfigurationProperties(\"app.staleness\") record StalenessProperties(@DefaultValue(\"30d\") Duration maxAge) with the default also written in application.yml",
+        "when": "the context starts with no app.staleness property, then with app.staleness.max-age=7d, then with app.staleness.max-age=0d",
+        "then": "maxAge binds to Duration.ofDays(30), then Duration.ofDays(7); 0d or any value under one day fails startup with IllegalArgumentException containing \"app.staleness.max-age must be at least 1 day\""
+      },
+      {
+        "given": "ProcessingConfig",
+        "when": "the Spring context starts",
+        "then": "it exposes exactly one java.time.Clock bean named \"clock\" defaulting to Clock.systemUTC() (replaceable by Clock.fixed(...) in tests) and builds the WorkRequestValidator bean from that Clock and StalenessProperties.maxAge, so a batch posted to the API containing a request requestedAt more than 30 days before the clock returns a ProblemDto with code \"STALE\" and field \"requestedAt\" and omits that request from the queue"
+      },
+      {
+        "given": "a processor built from a staleness-aware validator (fixed clock, 30 days), the real DuplicateResolver and WorkRequestSorter, and a batch where recent MEDIUM R-1 and 90-day-old CRITICAL R-2 share equipmentId and normalized description, alongside invalid requests and duplicates",
+        "when": "the batch is processed 100 times in shuffled order",
+        "then": "every run gives the identical queue, problems and trace: R-2 produces only a STALE problem with no DUPLICATE problem, R-1 stays in the queue at MEDIUM with no escalation, the trace still has exactly three entries validate/deduplicate/prioritize with validate out == deduplicate in, validate-stage problems (stale and field problems interleaved by input index) precede deduplicate-stage problems, and BatchObserver has a counter for STALE following the existing per-ProblemCode naming scheme that increments once per stale problem"
+      }
+    ],
+    "affectedClasses": [
+      "ProblemCode",
+      "Problem",
+      "WorkRequestValidator",
+      "StalenessProperties",
+      "ProcessingConfig",
+      "BatchObserver"
+    ],
+    "outOfScope": [
+      "Changing sample-batch.json or the pinned SampleBatchTest expectations",
+      "Flagging requests whose requestedAt is in the future, or any clock-skew tolerance",
+      "Marking stale requests as a non-blocking warning that still enters the queue",
+      "A per-priority or per-equipment staleness threshold",
+      "Re-checking staleness in the deduplicate or prioritize stages, or a new API field/endpoint for stale counts",
+      "Replacing Instant.now() usages elsewhere in the codebase with the new Clock bean"
+    ]
+  },
+  "raw": {
+    "is_error": false,
+    "duration_api_ms": 37727,
+    "num_turns": 2,
+    "stop_reason": "tool_use",
+    "session_id": "93c43b8d-a71e-4e6d-8255-b4d4c99d741f",
+    "total_cost_usd": 0.225877,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 13250,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 3342,
+      "output_tokens_details": {
+        "thinking_tokens": 902
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 13250,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "global",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 3342,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 13250,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 13250
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 9757,
+        "outputTokens": 12,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 0.009817,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty"
+      },
+      "claude-opus-5": {
+        "inputTokens": 2,
+        "outputTokens": 3342,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 13250,
+        "webSearchRequests": 0,
+        "costUSD": 0.21606,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 64000,
+        "canonicalModel": "claude-opus-5",
+        "provider": "firstParty"
+      }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "{\"title\":\"Flag requests older than 30 days as stale\",\"criteria\":[{\"given\":\"the ProblemCode enum\",\"when\":\"its values are listed\",\"then\":\"a sixth constant STALE exists, appended last so existing constants keep their order: NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE\"},{\"given\":\"the new static factory Problem.stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge)\",\"when\":\"called with 3, \\\"R-7\\\", 2026-09-01T08:00:00Z and Duration.ofDays(30)\",\"then\":\"it returns a Problem with inputIndex 3, requestId \\\"R-7\\\", code STALE, field \\\"requestedAt\\\", null relatedRequestId/escalatedFrom/escalatedTo and message exactly \\\"R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old\\\" (day count from maxAge.toDays(); no input index in the message)\"},{\"given\":\"a validator built with the new constructor WorkRequestValidator(Clock clock, Duration maxAge) using Clock.fixed(2026-10-20T08:00:00Z, UTC) and Duration.ofDays(30)\",\"when\":\"validate is called with otherwise valid R-1 requestedAt 2026-09-01T08:00:00Z and R-2 requestedAt 2026-10-19T08:00:00Z\",\"then\":\"StageResult.requests holds only R-2 and problems hold exactly one STALE problem for R-1 at its input index: a stale request is both reported as a problem and kept out of the queue\"},{\"given\":\"the same validator (fixed clock, 30 days), with clock.instant() read once per validate call so all requests share one \\\"now\\\"\",\"when\":\"validate is called with requests requestedAt 2026-09-20T08:00:00Z (exactly 30 days), 2026-09-20T07:59:59Z (one second older) and 2026-11-01T08:00:00Z (future)\",\"then\":\"only the one-second-older request is STALE; staleness is strictly requestedAt.isBefore(now.minus(maxAge)), and future dates are accepted with no problem\"},{\"given\":\"a validator with a fixed clock and 30 day max age\",\"when\":\"validate is called with (a) a null element, (b) a 90-day-old request also missing equipmentId, (c) a 90-day-old request whose requestedAt is reported unreadable via invalidFieldsByIndex\",\"then\":\"(a) yields only NULL_REQUEST, (b) only the MISSING_FIELD problem for equipmentId, (c) only the INVALID_VALUE problem for requestedAt \u2014 field checks run first and a request with any field problem is never checked for staleness, so a STALE problem always has a non-null requestId\"},{\"given\":\"a validator with Clock.fixed(2026-10-20T08:00:00Z, UTC) and 30 days\",\"when\":\"validate is called with 3 requests of which R-7 is 90 days old and R-3 is missing description\",\"then\":\"the StageTrace is stage \\\"validate\\\", in 3, out 1, notes exactly [\\\"R-3 rejected: missing description\\\", \\\"R-7 rejected: stale\\\"]: one naturally sorted note per rejected request, stale notes read \\\"<requestId> rejected: stale\\\" and contain no input index\"},{\"given\":\"the preserved no-argument constructor new WorkRequestValidator() and the other existing constructors of DuplicateResolver, WorkRequestSorter and WorkRequestProcessor\",\"when\":\"a batch of years-old but otherwise valid requests is validated through new WorkRequestValidator()\",\"then\":\"no STALE problem is produced and every request is accepted \u2014 the no-arg constructor performs no staleness check, so existing tests including SampleBatchTest's 13 \u2192 10 \u2192 6 counts are unaffected; new WorkRequestValidator(null, Duration.ofDays(30)) and new WorkRequestValidator(Clock.systemUTC(), null) throw NullPointerException (\\\"clock\\\", \\\"maxAge\\\") and a maxAge under one day throws IllegalArgumentException\"},{\"given\":\"a new @ConfigurationProperties(\\\"app.staleness\\\") record StalenessProperties(@DefaultValue(\\\"30d\\\") Duration maxAge) with the default also written in application.yml\",\"when\":\"the context starts with no app.staleness property, then with app.staleness.max-age=7d, then with app.staleness.max-age=0d\",\"then\":\"maxAge binds to Duration.ofDays(30), then Duration.ofDays(7); 0d or any value under one day fails startup with IllegalArgumentException containing \\\"app.staleness.max-age must be at least 1 day\\\"\"},{\"given\":\"ProcessingConfig\",\"when\":\"the Spring context starts\",\"then\":\"it exposes exactly one java.time.Clock bean named \\\"clock\\\" defaulting to Clock.systemUTC() (replaceable by Clock.fixed(...) in tests) and builds the WorkRequestValidator bean from that Clock and StalenessProperties.maxAge, so a batch posted to the API containing a request requestedAt more than 30 days before the clock returns a ProblemDto with code \\\"STALE\\\" and field \\\"requestedAt\\\" and omits that request from the queue\"},{\"given\":\"a processor built from a staleness-aware validator (fixed clock, 30 days), the real DuplicateResolver and WorkRequestSorter, and a batch where recent MEDIUM R-1 and 90-day-old CRITICAL R-2 share equipmentId and normalized description, alongside invalid requests and duplicates\",\"when\":\"the batch is processed 100 times in shuffled order\",\"then\":\"every run gives the identical queue, problems and trace: R-2 produces only a STALE problem with no DUPLICATE problem, R-1 stays in the queue at MEDIUM with no escalation, the trace still has exactly three entries validate/deduplicate/prioritize with validate out == deduplicate in, validate-stage problems (stale and field problems interleaved by input index) precede deduplicate-stage problems, and BatchObserver has a counter for STALE following the existing per-ProblemCode naming scheme that increments once per stale problem\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestValidator\",\"StalenessProperties\",\"ProcessingConfig\",\"BatchObserver\"],\"outOfScope\":[\"Changing sample-batch.json or the pinned SampleBatchTest expectations\",\"Flagging requests whose requestedAt is in the future, or any clock-skew tolerance\",\"Marking stale requests as a non-blocking warning that still enters the queue\",\"A per-priority or per-equipment staleness threshold\",\"Re-checking staleness in the deduplicate or prioritize stages, or a new API field/endpoint for stale counts\",\"Replacing Instant.now() usages elsewhere in the codebase with the new Clock bean\"]}",
+    "structured_output": {
+      "title": "Flag requests older than 30 days as stale",
+      "criteria": [
+        {
+          "given": "the ProblemCode enum",
+          "when": "its values are listed",
+          "then": "a sixth constant STALE exists, appended last so existing constants keep their order: NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE"
+        },
+        {
+          "given": "the new static factory Problem.stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge)",
+          "when": "called with 3, \"R-7\", 2026-09-01T08:00:00Z and Duration.ofDays(30)",
+          "then": "it returns a Problem with inputIndex 3, requestId \"R-7\", code STALE, field \"requestedAt\", null relatedRequestId/escalatedFrom/escalatedTo and message exactly \"R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old\" (day count from maxAge.toDays(); no input index in the message)"
+        },
+        {
+          "given": "a validator built with the new constructor WorkRequestValidator(Clock clock, Duration maxAge) using Clock.fixed(2026-10-20T08:00:00Z, UTC) and Duration.ofDays(30)",
+          "when": "validate is called with otherwise valid R-1 requestedAt 2026-09-01T08:00:00Z and R-2 requestedAt 2026-10-19T08:00:00Z",
+          "then": "StageResult.requests holds only R-2 and problems hold exactly one STALE problem for R-1 at its input index: a stale request is both reported as a problem and kept out of the queue"
+        },
+        {
+          "given": "the same validator (fixed clock, 30 days), with clock.instant() read once per validate call so all requests share one \"now\"",
+          "when": "validate is called with requests requestedAt 2026-09-20T08:00:00Z (exactly 30 days), 2026-09-20T07:59:59Z (one second older) and 2026-11-01T08:00:00Z (future)",
+          "then": "only the one-second-older request is STALE; staleness is strictly requestedAt.isBefore(now.minus(maxAge)), and future dates are accepted with no problem"
+        },
+        {
+          "given": "a validator with a fixed clock and 30 day max age",
+          "when": "validate is called with (a) a null element, (b) a 90-day-old request also missing equipmentId, (c) a 90-day-old request whose requestedAt is reported unreadable via invalidFieldsByIndex",
+          "then": "(a) yields only NULL_REQUEST, (b) only the MISSING_FIELD problem for equipmentId, (c) only the INVALID_VALUE problem for requestedAt \u2014 field checks run first and a request with any field problem is never checked for staleness, so a STALE problem always has a non-null requestId"
+        },
+        {
+          "given": "a validator with Clock.fixed(2026-10-20T08:00:00Z, UTC) and 30 days",
+          "when": "validate is called with 3 requests of which R-7 is 90 days old and R-3 is missing description",
+          "then": "the StageTrace is stage \"validate\", in 3, out 1, notes exactly [\"R-3 rejected: missing description\", \"R-7 rejected: stale\"]: one naturally sorted note per rejected request, stale notes read \"<requestId> rejected: stale\" and contain no input index"
+        },
+        {
+          "given": "the preserved no-argument constructor new WorkRequestValidator() and the other existing constructors of DuplicateResolver, WorkRequestSorter and WorkRequestProcessor",
+          "when": "a batch of years-old but otherwise valid requests is validated through new WorkRequestValidator()",
+          "then": "no STALE problem is produced and every request is accepted \u2014 the no-arg constructor performs no staleness check, so existing tests including SampleBatchTest's 13 \u2192 10 \u2192 6 counts are unaffected; new WorkRequestValidator(null, Duration.ofDays(30)) and new WorkRequestValidator(Clock.systemUTC(), null) throw NullPointerException (\"clock\", \"maxAge\") and a maxAge under one day throws IllegalArgumentException"
+        },
+        {
+          "given": "a new @ConfigurationProperties(\"app.staleness\") record StalenessProperties(@DefaultValue(\"30d\") Duration maxAge) with the default also written in application.yml",
+          "when": "the context starts with no app.staleness property, then with app.staleness.max-age=7d, then with app.staleness.max-age=0d",
+          "then": "maxAge binds to Duration.ofDays(30), then Duration.ofDays(7); 0d or any value under one day fails startup with IllegalArgumentException containing \"app.staleness.max-age must be at least 1 day\""
+        },
+        {
+          "given": "ProcessingConfig",
+          "when": "the Spring context starts",
+          "then": "it exposes exactly one java.time.Clock bean named \"clock\" defaulting to Clock.systemUTC() (replaceable by Clock.fixed(...) in tests) and builds the WorkRequestValidator bean from that Clock and StalenessProperties.maxAge, so a batch posted to the API containing a request requestedAt more than 30 days before the clock returns a ProblemDto with code \"STALE\" and field \"requestedAt\" and omits that request from the queue"
+        },
+        {
+          "given": "a processor built from a staleness-aware validator (fixed clock, 30 days), the real DuplicateResolver and WorkRequestSorter, and a batch where recent MEDIUM R-1 and 90-day-old CRITICAL R-2 share equipmentId and normalized description, alongside invalid requests and duplicates",
+          "when": "the batch is processed 100 times in shuffled order",
+          "then": "every run gives the identical queue, problems and trace: R-2 produces only a STALE problem with no DUPLICATE problem, R-1 stays in the queue at MEDIUM with no escalation, the trace still has exactly three entries validate/deduplicate/prioritize with validate out == deduplicate in, validate-stage problems (stale and field problems interleaved by input index) precede deduplicate-stage problems, and BatchObserver has a counter for STALE following the existing per-ProblemCode naming scheme that increments once per stale problem"
+        }
+      ],
+      "affectedClasses": [
+        "ProblemCode",
+        "Problem",
+        "WorkRequestValidator",
+        "StalenessProperties",
+        "ProcessingConfig",
+        "BatchObserver"
+      ],
+      "outOfScope": [
+        "Changing sample-batch.json or the pinned SampleBatchTest expectations",
+        "Flagging requests whose requestedAt is in the future, or any clock-skew tolerance",
+        "Marking stale requests as a non-blocking warning that still enters the queue",
+        "A per-priority or per-equipment staleness threshold",
+        "Re-checking staleness in the deduplicate or prioritize stages, or a new API field/endpoint for stale counts",
+        "Replacing Instant.now() usages elsewhere in the codebase with the new Clock bean"
+      ]
+    },
+    "ttft_ms": 12984,
+    "ttft_stream_ms": 1407,
+    "time_to_request_ms": 120,
+    "type": "result",
+    "duration_ms": 36533,
+    "uuid": "1ddf7c61-89c3-4c04-8605-f6e304919079"
+  }
+}

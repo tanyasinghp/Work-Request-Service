@@ -82,3 +82,18 @@ def test_wire_schema_does_not_loosen_local_validation():
     # The model sees the reduced schema; parse_criteria still enforces the full one.
     _, errors = parse_criteria(json.dumps(with_change(affectedClasses=["lowercase"])))
     assert errors
+
+
+def test_diff_outputs_must_contain_a_diff_header():
+    from stages.common import IMPLEMENT_SCHEMA, TESTS_SCHEMA
+    for schema_path in (IMPLEMENT_SCHEMA, TESTS_SCHEMA):
+        schema = load_schema(schema_path)
+        placeholder = {"diff": "placeholder", "summary": "placeholder", "uncertainties": []}
+        real = {"diff": "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", "summary": "s",
+                "uncertainties": []}
+        if "uncertainties" not in schema["required"]:
+            placeholder.pop("uncertainties")
+            real.pop("uncertainties")
+        assert any("does not match" in error for error in validate_criteria(placeholder, schema)), schema_path
+        assert validate_criteria(real, schema) == [], schema_path
+        assert "pattern" not in wire_schema(schema)["properties"]["diff"]
