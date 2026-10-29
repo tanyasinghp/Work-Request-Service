@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["diff", "summary", "uncertainties"],
+  "properties": {
+    "diff": { "type": "string", "minLength": 1, "description": "Unified diff, git style, paths under backend/src/." },
+    "summary": { "type": "string", "minLength": 1 },
+    "uncertainties": { "type": "array", "items": { "type": "string" } }
+  }
+}

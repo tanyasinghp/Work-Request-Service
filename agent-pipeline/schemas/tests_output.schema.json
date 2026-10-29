@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["diff", "summary"],
+  "properties": {
+    "diff": { "type": "string", "minLength": 1, "description": "Unified diff adding new test files under backend/src/test/." },
+    "summary": { "type": "string", "minLength": 1 }
+  }
+}
