@@ -1,0 +1,205 @@
+{
+  "storyId": "suspicious-timestamp",
+  "startedAt": "2026-10-29T16:05:49+00:00",
+  "llmCalls": [
+    {
+      "file": "01-enrich",
+      "stage": "enrich",
+      "model": "claude-opus-5",
+      "costUsd": 0.26431400000000005,
+      "error": null
+    },
+    {
+      "file": "02-enrich-retry",
+      "stage": "enrich-retry",
+      "model": "claude-opus-5",
+      "costUsd": 0.18038400000000002,
+      "error": null
+    },
+    {
+      "file": "03-implement-1",
+      "stage": "implement-1",
+      "model": "claude-opus-5",
+      "costUsd": 0.346221,
+      "error": null
+    },
+    {
+      "file": "04-write-tests",
+      "stage": "write-tests",
+      "model": "claude-opus-5",
+      "costUsd": 1.4725920000000001,
+      "error": null
+    },
+    {
+      "file": "05-summarize",
+      "stage": "summarize",
+      "model": "claude-opus-5",
+      "costUsd": 0.464834,
+      "error": null
+    }
+  ],
+  "implementAttempts": [
+    {
+      "attempt": 1,
+      "summary": "Added `ProblemCode.SUSPICIOUS_TIMESTAMP` (declared last) plus a `Problem.suspiciousTimestamp(inputIndex, requestId, requestedAt)` factory, and made `WorkRequestValidator` clock-aware: a new `WorkRequestValidator(Clock)` overload (null-checked with message \"clock\") alongside the existing no-arg constructor defaulting to `Clock.systemUTC()`, reading `clock.instant()` once per `validate` call and appending a SUSPICIOUS_TIMESTAMP problem (after the field-order problems) for any parsed `requestedAt` strictly after that instant, with the trace note reason \"future requestedAt\". `ProcessingConfig` now exposes a `clock` bean returning `Clock.systemUTC()` and builds `workRequestValidator` with it; the generated order-independence batch gained one far-future request (size 200 \u2192 201) so every ProblemCode stays covered.",
+      "diffLines": 80,
+      "applied": true,
+      "violations": [],
+      "warnings": [
+        "backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java: changes 1 existing assertion line(s); review them"
+      ],
+      "uncertainties": [
+        "The generated batch's future request uses a hard-coded 2099 instant and id FUT-000/FEQ-0; if a test pins a specific id or count beyond hasSize(201) it may need adjusting.",
+        "BatchObserver needed no change since it already iterates ProblemCode.values(), so the new code automatically gets a counter.",
+        "Assumed the rejection-note reason wording for the new code is \"future requestedAt\" derived from the problem's field, as stated in the criteria."
+      ]
+    }
+  ],
+  "gateAttempts": [
+    {
+      "attempt": 1,
+      "passed": true,
+      "failingTest": null,
+      "exitCode": 0,
+      "durationSeconds": 7,
+      "output": ""
+    }
+  ],
+  "storyTitle": "Report future timestamps",
+  "story": "# Report future timestamps\n\nAs an integrator sending batches from several sites, I want a SUSPICIOUS_TIMESTAMP problem\nfor any request whose requestedAt is in the future, so that clock or time-zone bugs in a\nsending system are caught instead of distorting the queue order.\n\n\"In the future\" is relative to the time the batch is processed, and the check must be\ntestable without depending on the real clock.",
+  "branch": "agent/suspicious-timestamp",
+  "baseCommit": "6406bc28faca3e882e4a8d6be7934b0ff14330a0",
+  "llm": {
+    "backend": "claude-cli",
+    "requestedModel": null,
+    "models": [
+      "claude-opus-5"
+    ]
+  },
+  "criteria": {
+    "title": "Flag future requestedAt as SUSPICIOUS_TIMESTAMP",
+    "criteria": [
+      {
+        "given": "ProblemCode and Problem",
+        "when": "a new problem is needed for future timestamps",
+        "then": "ProblemCode has a new constant SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID) and Problem gains a static factory Problem.suspiciousTimestamp(int inputIndex, String requestId, Instant requestedAt) producing code SUSPICIOUS_TIMESTAMP, field \"requestedAt\", null relatedRequestId/escalatedFrom/escalatedTo, and message \"<requestId> has requestedAt <instant> in the future\" using Instant.toString(), or \"Request has requestedAt <instant> in the future\" when requestId is null"
+      },
+      {
+        "given": "a WorkRequestValidator built with Clock.fixed(Instant.parse(\"2026-10-20T12:00:00Z\"), ZoneOffset.UTC)",
+        "when": "validate is called on one otherwise-valid request with requestedAt 2026-10-21T08:30:00Z",
+        "then": "exactly one problem is returned, with code SUSPICIOUS_TIMESTAMP, field \"requestedAt\", inputIndex 0 and the request's requestId, and the request is absent from StageResult.requests()"
+      },
+      {
+        "given": "the same clock fixed at 2026-10-20T12:00:00Z",
+        "when": "requests with requestedAt 2026-10-20T12:00:00Z (exactly equal) or 2026-10-20T11:59:59.999Z are validated",
+        "then": "no SUSPICIOUS_TIMESTAMP problem is reported and both are accepted; only an instant strictly after the clock instant is future, with no tolerance window and no configuration property"
+      },
+      {
+        "given": "a request whose requestedAt is null, or whose requestedAt is listed in invalidFieldsByIndex as an unreadable raw value",
+        "when": "it is validated with a fixed clock",
+        "then": "only MISSING_FIELD or INVALID_VALUE for field \"requestedAt\" is reported and no SUSPICIOUS_TIMESTAMP problem, since the check needs a parsed instant"
+      },
+      {
+        "given": "a request WR-1 missing equipmentId and also dated in the future",
+        "when": "it is validated",
+        "then": "both problems are reported for that input index, the existing field-order problems first and SUSPICIOUS_TIMESTAMP last, and the validate trace note is the index-free \"WR-1 rejected: missing equipmentId, future requestedAt\" (label \"Request without id\" when the id is blank), with notes still sorted and out counting only accepted requests"
+      },
+      {
+        "given": "a batch with identical content in a past-dated and a future-dated request, processed by WorkRequestProcessor with a fixed clock",
+        "when": "process(batch) runs and the batch is shuffled repeatedly",
+        "then": "the future-dated request is rejected in validate, never reaches deduplicate (no DUPLICATE problem or escalation for it), the trace still has exactly three entries validate/deduplicate/prioritize, and queue, problems and notes are identical for every ordering with SUSPICIOUS_TIMESTAMP problems ordered by inputIndex inside the validate block"
+      },
+      {
+        "given": "existing callers of new WorkRequestValidator()",
+        "when": "the clock is introduced",
+        "then": "the no-arg constructor still compiles and behaves as if given Clock.systemUTC(), a new WorkRequestValidator(Clock clock) overload exists that throws NullPointerException with message \"clock\" on null, and clock.instant() is read once per validate call so all requests in a batch share one instant"
+      },
+      {
+        "given": "the Spring context",
+        "when": "it starts with no overriding bean",
+        "then": "ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC() and builds the workRequestValidator bean with it"
+      },
+      {
+        "given": "the pinned 13-request sample batch (all requestedAt on 2026-10-20) and the generated order-independence batch",
+        "when": "they are processed after 2026-10-20 with the system clock",
+        "then": "the sample batch produces no SUSPICIOUS_TIMESTAMP and keeps its pinned queue, problems and counts 13 \u2192 10 \u2192 6, while the generated batch is extended to include a future-dated request so every ProblemCode value, including SUSPICIOUS_TIMESTAMP, is still covered and BatchObserver reports one counter per code"
+      }
+    ],
+    "affectedClasses": [
+      "ProblemCode",
+      "Problem",
+      "WorkRequestValidator",
+      "ProcessingConfig",
+      "OrderIndependenceTest",
+      "BatchObserver"
+    ],
+    "outOfScope": [
+      "Any configurable clock-skew tolerance or app.* property for the future check",
+      "Flagging implausibly old requestedAt values",
+      "Making DuplicateResolver, WorkRequestSorter or WorkRequestProcessor clock-aware",
+      "Changing the pinned sample-batch.json data or its expected output",
+      "Changing the API DTO shape or adding a new HTTP endpoint/response field",
+      "Changing existing ProblemCode constant order or existing problem messages"
+    ]
+  },
+  "writeTestsSource": "criteria + main versions of 5 file(s); no diff",
+  "tests": {
+    "summary": "Five new test files, no existing file touched.\n\n**1. `domain/SuspiciousTimestampProblemTest.java` \u2014 criterion 1 (ProblemCode + Problem factory)**\n- `declaresSuspiciousTimestampLastAfterConflictingRequestId`: `ProblemCode.values()` is exactly the five existing constants in their current order with `SUSPICIOUS_TIMESTAMP` appended last (fails if the constant is missing, or inserted anywhere but last).\n- `buildsASuspiciousTimestampProblemForTheRequestedAtField`: factory produces code `SUSPICIOUS_TIMESTAMP`, field `\"requestedAt\"`.\n- `keepsTheInputIndexAndRequestIdItWasGiven`; `leavesRelatedRequestIdAndEscalationFieldsNull` (all three null).\n- `namesTheRequestAndTheInstantInTheMessage`: `\"WR-1 has requestedAt 2026-10-21T08:30:00Z in the future\"`; `fallsBackToAGenericSubjectWhenTheRequestIdIsNull`: `\"Request has requestedAt \u2026 in the future\"`; `rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept` pins `Instant.toString()` rather than a custom formatter.\n\n**2. `processing/FutureRequestedAtValidationTest.java` \u2014 criteria 2\u20135 and 7 (fixed clock `2026-10-20T12:00:00Z`, UTC)**\n- Criterion 2: `reportsOneSuspiciousTimestampProblemForAFutureDatedRequest` (exactly one problem; code, field, inputIndex 0, requestId), `dropsTheFutureDatedRequestFromTheStageResultRequests`.\n- Criterion 3: `acceptsARequestDatedExactlyAtTheClockInstant`, `acceptsARequestDatedOneMillisecondBeforeTheClockInstant` (both accepted, no problems), and `flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow` \u2014 strictly-after semantics, no tolerance window, no property involved.\n- Criterion 4: `reportsOnlyMissingFieldWhenRequestedAtIsNull` and `reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed` (via `invalidFieldsByIndex`) each assert the problem list is exactly the one existing problem, so any extra SUSPICIOUS_TIMESTAMP fails.\n- Criterion 5: `reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem` (MISSING_FIELD equipmentId first, SUSPICIOUS_TIMESTAMP last), `reportsBothProblemsForTheSameInputIndex`, `writesAnIndexFreeNoteListingMissingAndFutureReasons` (`\"WR-1 rejected: missing equipmentId, future requestedAt\"`), `writesAFutureRequestedAtNoteForAnOtherwiseValidRequest`, `labelsABlankIdRequestAsRequestWithoutIdInTheNote`, `keepsNotesSortedWhenAFutureRequestIsRejected`, `countsOnlyAcceptedRequestsInTheValidateTrace` (in 2, out 1).\n- Criterion 7: `noArgConstructorFlagsARequestDatedAfterTheRealNow` / `noArgConstructorAcceptsARequestDatedBeforeTheRealNow` (no-arg behaves as `Clock.systemUTC()`), `rejectsANullClock` (NPE with message `\"clock\"`), `readsTheClockOncePerValidateCall` (counting clock, 3 requests \u2192 1 read), `comparesEveryRequestInABatchAgainstTheSameInstant` (clock that jumps an hour per read: both requests must still be flagged, which only holds if one instant is shared).\n- Criterion 9 (sample-batch side): `acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast` \u2014 a request on the sample-batch date (2026\u201110\u201120) validated with the real system clock yields no problem, so the pinned sample batch cannot gain a SUSPICIOUS_TIMESTAMP.\n\n**3. `processing/FutureRequestedAtPipelineTest.java` \u2014 criterion 6 (and the coverage half of 9)**\nBatch holds a past request and a content-identical, higher-priority future twin, a second future request and another valid past request, processed by a `WorkRequestProcessor` whose validator has the fixed clock.\n- `reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests`, `reportsNoDuplicateProblemForTheFutureTwin`, `neverEscalatesAPriorityFromTheFutureTwin` (no escalation fields; the past request is kept as-is) \u2014 proves rejection happens before deduplicate.\n- `keepsTheThreeStageTraceWhenAFutureRequestIsRejected` (validate/deduplicate/prioritize) and `passesOnlyTheAcceptedRequestsIntoDeduplicate` (deduplicate `in` = 2).\n- `producesTheSameQueueForEveryInputOrder`, `producesTheSameProblemsForEveryInputOrder` (problem content compared index-free, as messages must be), `producesTheSameTraceNotesForEveryInputOrder` \u2014 100 seeded shuffles each.\n- `ordersSuspiciousTimestampProblemsByInputIndex`: under every shuffle the SUSPICIOUS_TIMESTAMP inputIndexes are ascending.\n- `keepsEveryProblemCodeIncludingSuspiciousTimestampReachable`: a generated batch (null, missing field, duplicate pair, id conflict, future-dated) plus one unreadable raw `requestedAt` covers every `ProblemCode` value exactly.\n\n**4. `config/ClockBeanWiringTest.java` \u2014 criterion 8**\n`ApplicationContextRunner` over `ProcessingConfig`: `exposesAClockBeanNamedClock`, `theClockBeanIsTheSystemUtcClock` (`equals Clock.systemUTC()`), and two tests that take the context's Clock bean and show the context's validator flags `clock.instant() + 1h` and accepts `clock.instant() - 1h`, i.e. the validator bean is built with that clock.\n\n**5. `api/BatchObserverSuspiciousTimestampTest.java` \u2014 criterion 9 (metrics)**\n`registersOneRejectionCounterPerProblemCode`: the `workrequests.rejected` counters' `code` tags equal the full `ProblemCode` set (so a new code must be registered up front). `countsAFutureDatedRequestUnderTheSuspiciousTimestampCode`: observing a batch with one future-dated request increments the `code=SUSPICIOUS_TIMESTAMP` counter once.\n\nOnly identifiers named in the criteria are used (`Problem.suspiciousTimestamp`, `ProblemCode.SUSPICIOUS_TIMESTAMP`, `new WorkRequestValidator(Clock)`, bean name `clock`) plus existing public APIs and the `TestRequests` helper; all clock-dependent behaviour uses `Clock.fixed(...)` or explicitly relative instants where the criterion itself demands the system clock.",
+    "testNames": [
+      "SuspiciousTimestampProblemTest.declaresSuspiciousTimestampLastAfterConflictingRequestId",
+      "SuspiciousTimestampProblemTest.buildsASuspiciousTimestampProblemForTheRequestedAtField",
+      "SuspiciousTimestampProblemTest.keepsTheInputIndexAndRequestIdItWasGiven",
+      "SuspiciousTimestampProblemTest.leavesRelatedRequestIdAndEscalationFieldsNull",
+      "SuspiciousTimestampProblemTest.namesTheRequestAndTheInstantInTheMessage",
+      "SuspiciousTimestampProblemTest.fallsBackToAGenericSubjectWhenTheRequestIdIsNull",
+      "SuspiciousTimestampProblemTest.rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept",
+      "FutureRequestedAtValidationTest.reportsOneSuspiciousTimestampProblemForAFutureDatedRequest",
+      "FutureRequestedAtValidationTest.dropsTheFutureDatedRequestFromTheStageResultRequests",
+      "FutureRequestedAtValidationTest.countsOnlyAcceptedRequestsInTheValidateTrace",
+      "FutureRequestedAtValidationTest.acceptsARequestDatedExactlyAtTheClockInstant",
+      "FutureRequestedAtValidationTest.acceptsARequestDatedOneMillisecondBeforeTheClockInstant",
+      "FutureRequestedAtValidationTest.flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow",
+      "FutureRequestedAtValidationTest.reportsOnlyMissingFieldWhenRequestedAtIsNull",
+      "FutureRequestedAtValidationTest.reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed",
+      "FutureRequestedAtValidationTest.reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem",
+      "FutureRequestedAtValidationTest.reportsBothProblemsForTheSameInputIndex",
+      "FutureRequestedAtValidationTest.writesAnIndexFreeNoteListingMissingAndFutureReasons",
+      "FutureRequestedAtValidationTest.writesAFutureRequestedAtNoteForAnOtherwiseValidRequest",
+      "FutureRequestedAtValidationTest.labelsABlankIdRequestAsRequestWithoutIdInTheNote",
+      "FutureRequestedAtValidationTest.keepsNotesSortedWhenAFutureRequestIsRejected",
+      "FutureRequestedAtValidationTest.noArgConstructorFlagsARequestDatedAfterTheRealNow",
+      "FutureRequestedAtValidationTest.noArgConstructorAcceptsARequestDatedBeforeTheRealNow",
+      "FutureRequestedAtValidationTest.acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast",
+      "FutureRequestedAtValidationTest.rejectsANullClock",
+      "FutureRequestedAtValidationTest.readsTheClockOncePerValidateCall",
+      "FutureRequestedAtValidationTest.comparesEveryRequestInABatchAgainstTheSameInstant",
+      "FutureRequestedAtPipelineTest.reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests",
+      "FutureRequestedAtPipelineTest.reportsNoDuplicateProblemForTheFutureTwin",
+      "FutureRequestedAtPipelineTest.neverEscalatesAPriorityFromTheFutureTwin",
+      "FutureRequestedAtPipelineTest.keepsTheThreeStageTraceWhenAFutureRequestIsRejected",
+      "FutureRequestedAtPipelineTest.passesOnlyTheAcceptedRequestsIntoDeduplicate",
+      "FutureRequestedAtPipelineTest.producesTheSameQueueForEveryInputOrder",
+      "FutureRequestedAtPipelineTest.producesTheSameProblemsForEveryInputOrder",
+      "FutureRequestedAtPipelineTest.producesTheSameTraceNotesForEveryInputOrder",
+      "FutureRequestedAtPipelineTest.ordersSuspiciousTimestampProblemsByInputIndex",
+      "FutureRequestedAtPipelineTest.keepsEveryProblemCodeIncludingSuspiciousTimestampReachable",
+      "ClockBeanWiringTest.exposesAClockBeanNamedClock",
+      "ClockBeanWiringTest.theClockBeanIsTheSystemUtcClock",
+      "ClockBeanWiringTest.buildsTheValidatorWithTheContextClockSoFutureRequestsAreFlagged",
+      "ClockBeanWiringTest.buildsTheValidatorWithTheContextClockSoPastRequestsAreAccepted",
+      "BatchObserverSuspiciousTimestampTest.registersOneRejectionCounterPerProblemCode",
+      "BatchObserverSuspiciousTimestampTest.countsAFutureDatedRequestUnderTheSuspiciousTimestampCode"
+    ],
+    "diffLines": 641,
+    "violations": [],
+    "warnings": []
+  },
+  "finalDiffLines": 2409,
+  "outcome": "passed",
+  "prDescription": "## What changed\n\nAdds a `SUSPICIOUS_TIMESTAMP` problem for requests whose `requestedAt` is strictly after the instant the batch is processed, and makes \"now\" injectable so the check is testable without the real clock.\n\nPer the story and criteria, the change set is:\n\n- `ProblemCode`: new constant `SUSPICIOUS_TIMESTAMP`, declared last (after `CONFLICTING_REQUEST_ID`), so existing constant order is untouched.\n- `Problem`: new static factory `Problem.suspiciousTimestamp(int inputIndex, String requestId, Instant requestedAt)` producing field `\"requestedAt\"`, null `relatedRequestId`/`escalatedFrom`/`escalatedTo`, and message `\"<requestId> has requestedAt <instant> in the future\"` (or `\"Request has requestedAt <instant> in the future\"` when the id is null).\n- `WorkRequestValidator`: now clock-aware. A new `WorkRequestValidator(Clock)` constructor sits alongside the existing no-arg one (which behaves as `Clock.systemUTC()`); `clock.instant()` is read once per `validate` call so all requests in a batch are compared against the same instant. Future-dated requests are rejected (dropped from `StageResult.requests()`) with the new problem appended after the existing field-order problems, and the trace note gains a `future requestedAt` reason.\n- `ProcessingConfig`: exposes a `java.time.Clock` bean named `clock` returning `Clock.systemUTC()` and builds `workRequestValidator` with it.\n- `OrderIndependenceTest` / `BatchObserver`-side coverage: the generated batch is extended with a future-dated request so every `ProblemCode` value, including the new one, stays reachable.\n\n43 new tests across five test classes.\n\n**Caveat for the reviewer:** the diff available to me was truncated \u2014 only the `agent-pipeline/runs/2026-10-29-suspicious-timestamp/*` prompt/response artifacts were visible in full. The description of the production changes above is reconstructed from the acceptance criteria and test names, not read off the diff. Please verify the `backend/` hunks directly.\n\n## Criteria coverage\n\n| Criterion | Checked by |\n| --- | --- |\n| `ProblemCode.SUSPICIOUS_TIMESTAMP` declared last; `Problem.suspiciousTimestamp(...)` shape and message | `SuspiciousTimestampProblemTest.declaresSuspiciousTimestampLastAfterConflictingRequestId`, `buildsASuspiciousTimestampProblemForTheRequestedAtField`, `keepsTheInputIndexAndRequestIdItWasGiven`, `leavesRelatedRequestIdAndEscalationFieldsNull`, `namesTheRequestAndTheInstantInTheMessage`, `fallsBackToAGenericSubjectWhenTheRequestIdIsNull`, `rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept` |\n| Fixed clock 2026-10-20T12:00:00Z, request at 2026-10-21T08:30:00Z \u2192 exactly one problem, right code/field/index/id, absent from `requests()` | `FutureRequestedAtValidationTest.reportsOneSuspiciousTimestampProblemForAFutureDatedRequest`, `dropsTheFutureDatedRequestFromTheStageResultRequests` |\n| Equal instant and 1 ms earlier accepted; strictly-after only, no tolerance window | `FutureRequestedAtValidationTest.acceptsARequestDatedExactlyAtTheClockInstant`, `acceptsARequestDatedOneMillisecondBeforeTheClockInstant`, `flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow` |\n| \"no configuration property\" for the check | Not covered by an assertion; only observable as the absence of an `app.*` key in the diff \u2014 please confirm no property was added |\n| Null or unparseable `requestedAt` \u2192 only `MISSING_FIELD`/`INVALID_VALUE`, no `SUSPICIOUS_TIMESTAMP` | `FutureRequestedAtValidationTest.reportsOnlyMissingFieldWhenRequestedAtIsNull`, `reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed` |\n| Missing `equipmentId` + future date \u2192 both problems, field problems first, index-free note `\"WR-1 rejected: missing equipmentId, future requestedAt\"`, blank-id label, notes sorted, `out` counts only accepted | `FutureRequestedAtValidationTest.reportsBothProblemsForTheSameInputIndex`, `reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem`, `writesAnIndexFreeNoteListingMissingAndFutureReasons`, `writesAFutureRequestedAtNoteForAnOtherwiseValidRequest`, `labelsABlankIdRequestAsRequestWithoutIdInTheNote`, `keepsNotesSortedWhenAFutureRequestIsRejected`, `countsOnlyAcceptedRequestsInTheValidateTrace` |\n| Future twin never reaches deduplicate; three-stage trace; order-independent queue/problems/notes; problems ordered by `inputIndex` | `FutureRequestedAtPipelineTest.reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests`, `reportsNoDuplicateProblemForTheFutureTwin`, `neverEscalatesAPriorityFromTheFutureTwin`, `keepsTheThreeStageTraceWhenAFutureRequestIsRejected`, `passesOnlyTheAcceptedRequestsIntoDeduplicate`, `producesTheSameQueueForEveryInputOrder`, `producesTheSameProblemsForEveryInputOrder`, `producesTheSameTraceNotesForEveryInputOrder`, `ordersSuspiciousTimestampProblemsByInputIndex` |\n| No-arg constructor still compiles and acts as `systemUTC()`; `WorkRequestValidator(Clock)` throws NPE `\"clock\"`; clock read once per call | `FutureRequestedAtValidationTest.noArgConstructorFlagsARequestDatedAfterTheRealNow`, `noArgConstructorAcceptsARequestDatedBeforeTheRealNow`, `rejectsANullClock`, `readsTheClockOncePerValidateCall`, `comparesEveryRequestInABatchAgainstTheSameInstant` (plus the existing suites that call `new WorkRequestValidator()` \u2014 they compile and pass) |\n| Spring context exposes a `Clock` bean named `clock` returning `Clock.systemUTC()`, validator built with it | `ClockBeanWiringTest.exposesAClockBeanNamedClock`, `theClockBeanIsTheSystemUtcClock`, `buildsTheValidatorWithTheContextClockSoFutureRequestsAreFlagged`, `buildsTheValidatorWithTheContextClockSoPastRequestsAreAccepted` |\n| Sample batch produces no `SUSPICIOUS_TIMESTAMP` under the system clock | `FutureRequestedAtValidationTest.acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast` |\n| Sample batch keeps its pinned queue, problems and counts 13 \u2192 10 \u2192 6 | Not covered by a new test; relies on the pre-existing `SampleBatchTest` still passing in the gate run |\n| Generated batch extended so every `ProblemCode`, including the new one, is covered; `BatchObserver` reports one counter per code | `FutureRequestedAtPipelineTest.keepsEveryProblemCodeIncludingSuspiciousTimestampReachable`, `BatchObserverSuspiciousTimestampTest.registersOneRejectionCounterPerProblemCode`, `countsAFutureDatedRequestUnderTheSuspiciousTimestampCode` (whether `OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem` itself was extended is in the truncated part of the diff) |\n\n## Test results\n\n- Attempt 1: passed. No retries. The gate output summary did not include per-test counts, so the only evidence here is \"all gates green on the first attempt\" \u2014 the pre-existing suites (`SampleBatchTest`, `WorkRequestValidatorTest`, `OrderIndependenceTest`, `BatchObserverTest`, `EdgeCaseTest`, API tests) are covered by that run, not by any new assertion.\n\n## Worth a closer look\n\n- **Truncated diff.** I could only read the pipeline artifact files; the `backend/` source hunks were cut off. Everything above about the production code is inferred. Review the actual `ProblemCode`, `Problem`, `WorkRequestValidator` and `ProcessingConfig` changes before merging.\n- **Three tests depend on the real clock.** `noArgConstructorFlagsARequestDatedAfterTheRealNow`, `noArgConstructorAcceptsARequestDatedBeforeTheRealNow` and `acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast` use `Clock.systemUTC()` by construction. The sample-batch one only holds while the build machine's clock is after 2026-10-20 (true today); the no-arg ones should be using a generous offset from `Instant.now()` rather than a literal date \u2014 worth checking they are not flaky near the boundary.\n- **The future-dated request in the generated/order-independence batch will age.** If its `requestedAt` is a hardcoded instant rather than `now + delta`, `SUSPICIOUS_TIMESTAMP` coverage silently disappears once that date passes and the \"every ProblemCode is covered\" assertion starts failing (or, worse, keeps passing for another reason). Please verify it is relative to the clock.\n- **Rejection, not annotation.** A future-dated request is dropped from the accepted queue entirely, so a single bad sender clock removes work from the queue rather than just flagging it. That is what the criteria ask for, but it is a behaviour change visible to API clients (lower `out` counts, new problem code in responses) and is worth a conscious sign-off.\n- **Note wording.** `\"WR-1 rejected: missing equipmentId, future requestedAt\"` mixes the existing `missing <field>` / `invalid <field>` reason vocabulary with a new `future requestedAt` phrasing that has no field prefix. Check the `rejectionNote` implementation does not alter the text of any existing reason, since trace notes are asserted verbatim elsewhere.\n- **NPE message.** `rejectsANullClock` is named for the behaviour but I cannot confirm from here that it asserts the message is exactly `\"clock\"` as the criterion requires.\n- **`Clock` bean name.** A bean of type `java.time.Clock` named `clock` is now in the context; confirm it does not collide with or get overridden by anything in the test slices, and that `ApplicationWiringTest` expectations were updated if it enumerates beans.\n",
+  "endedOnBranch": "main",
+  "cleanAfterRun": true,
+  "finishedAt": "2026-10-29T16:17:43+00:00",
+  "durationSeconds": 714,
+  "totalCostUsd": 2.7283
+}

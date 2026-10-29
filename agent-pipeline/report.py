@@ -30,7 +30,8 @@ def what_failed(data: dict[str, Any]) -> list[str]:
     return failures
 
 
-def summary_markdown(data: dict[str, Any], manual_fixes: list[str] | None = None) -> str:
+def summary_markdown(data: dict[str, Any], manual_fixes: list[str] | None = None,
+                     review_notes: list[str] | None = None) -> str:
     criteria = data.get("criteria") or {}
     gate = data.get("gateAttempts", [])
     llm = data.get("llm", {})
@@ -74,7 +75,12 @@ def summary_markdown(data: dict[str, Any], manual_fixes: list[str] | None = None
         lines += ["", "## Guardrail warnings (review these)", ""] + [f"- {warning}" for warning in warnings]
     lines += ["", "## What failed", ""] + ([f"- {item}" for item in what_failed(data)] or ["- Nothing."])
     lines += ["", "## Manual fixes", ""]
-    lines += [f"- {fix}" for fix in manual_fixes] if manual_fixes else ["- Not reviewed yet."]
+    if manual_fixes is None and review_notes is None:
+        lines.append("- Not reviewed yet.")
+    else:
+        lines += [f"- {fix}" for fix in manual_fixes or []] or ["- None needed."]
+    if review_notes:
+        lines += ["", "## Review notes", ""] + [f"- {note}" for note in review_notes]
     if not data.get("cleanAfterRun", True):
         lines += ["", "**Warning:** the working tree was not clean after this run."]
     return "\n".join(lines) + "\n"

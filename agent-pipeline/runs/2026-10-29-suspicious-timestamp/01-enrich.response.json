@@ -1,0 +1,266 @@
+{
+  "model": "claude-opus-5",
+  "costUsd": 0.26431400000000005,
+  "text": "{\"criteria\":[{\"given\":\"a validator built with Clock.fixed(Instant.parse(\\\"2026-10-20T12:00:00Z\\\"), ZoneOffset.UTC) and a batch containing one otherwise-valid request whose requestedAt is 2026-10-20T12:00:01Z\",\"when\":\"validate(batch) runs\",\"then\":\"the StageResult problems contain exactly one Problem with code ProblemCode.SUSPICIOUS_TIMESTAMP, field \\\"requestedAt\\\", the request's requestId, inputIndex 0, null relatedRequestId/escalatedFrom/escalatedTo, and the request is NOT in StageResult.requests()\"},{\"given\":\"a validator built with a clock fixed at 2026-10-20T12:00:00Z\",\"when\":\"validating requests whose requestedAt is exactly 2026-10-20T12:00:00Z, or earlier (e.g. 2026-10-20T11:59:59.999Z)\",\"then\":\"no SUSPICIOUS_TIMESTAMP problem is reported and the requests are accepted; only an instant strictly after the clock instant (including 2026-10-20T12:00:00.000000001Z) is treated as future \u2014 there is no tolerance window\"},{\"given\":\"the clock instant is 2026-10-20T12:00:00Z\",\"when\":\"a request WR-1 with requestedAt 2026-10-21T08:30:00Z is validated\",\"then\":\"the problem message is exactly \\\"WR-1 has requestedAt 2026-10-21T08:30:00Z in the future\\\" (requestId, then \\\" has requestedAt \\\", the Instant.toString() of requestedAt, then \\\" in the future\\\"), and it never mentions the input index\"},{\"given\":\"a request whose requestId is null or blank and whose requestedAt is in the future\",\"when\":\"it is validated\",\"then\":\"a SUSPICIOUS_TIMESTAMP problem is still reported with requestId null and message \\\"Request has requestedAt <instant> in the future\\\", in addition to the MISSING_FIELD problem for requestId\"},{\"given\":\"a request with requestedAt null, or with requestedAt supplied through invalidFieldsByIndex as an unreadable raw value\",\"when\":\"it is validated\",\"then\":\"only MISSING_FIELD (respectively INVALID_VALUE) is reported for field \\\"requestedAt\\\" and no SUSPICIOUS_TIMESTAMP problem is produced, because the future check needs a parsed instant\"},{\"given\":\"a request that is missing equipmentId and also has a future requestedAt\",\"when\":\"it is validated\",\"then\":\"both problems are reported for that input index, with the MISSING_FIELD problems (produced in field order requestId, equipmentId, priority, requestedAt, description) first and the SUSPICIOUS_TIMESTAMP problem last for that request\"},{\"given\":\"a batch where a future-dated request is rejected\",\"when\":\"validate completes\",\"then\":\"the validate StageTrace has in = batch size, out = number of accepted requests (the future-dated one excluded), and notes contain the sorted, index-free entry \\\"WR-1 rejected: future requestedAt\\\" (label \\\"Request without id\\\" when the id is blank), reusing the existing \\\"<label> rejected: <reasons>\\\" format with reasons joined by \\\", \\\"\"},{\"given\":\"a batch containing two requests with identical content, one dated in the past and one dated in the future, processed by WorkRequestProcessor with a fixed clock\",\"when\":\"process(batch) runs\",\"then\":\"the future-dated request is rejected in the validate stage with SUSPICIOUS_TIMESTAMP, it never reaches the deduplicate stage (no DUPLICATE problem and no priority escalation is reported for it), and the trace still has exactly three entries validate, deduplicate, prioritize\"},{\"given\":\"a batch containing several future-dated requests at different positions, shuffled repeatedly\",\"when\":\"process(batch) runs with the same fixed clock\",\"then\":\"the accepted queue, the problem list and the trace notes are identical for every ordering; the SUSPICIOUS_TIMESTAMP problems appear in the validate-stage block ordered by inputIndex\"},{\"given\":\"the clock is read for the batch\",\"when\":\"validate(List) or validate(List, Map) is called\",\"then\":\"clock.instant() is consulted once per call so every request in one batch is compared against the same instant\"},{\"given\":\"existing code and tests that call new WorkRequestValidator()\",\"when\":\"the class is compiled and used\",\"then\":\"the no-arg constructor still exists and behaves as if constructed with Clock.systemUTC(); a new constructor WorkRequestValidator(Clock clock) is added and throws NullPointerException with message \\\"clock\\\" when given null\"},{\"given\":\"the Spring application context\",\"when\":\"it starts with no overriding bean\",\"then\":\"ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC(), and the workRequestValidator bean is built with that Clock; no new configuration property is introduced\"},{\"given\":\"the ProblemCode enum\",\"when\":\"ProblemCode.values() is read\",\"then\":\"it contains SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID), so existing constants keep their order, BatchObserver gets one counter per code including the new one, and ProblemDto serialises the code as the string \\\"SUSPICIOUS_TIMESTAMP\\\" with field \\\"requestedAt\\\"\"},{\"given\":\"the pinned 13-request sample batch (all requestedAt on 2026-10-20) processed with the production system clock after 2026-10-20\",\"when\":\"process runs\",\"then\":\"no SUSPICIOUS_TIMESTAMP problem is produced and the pinned queue, problems and trace counts 13 \u2192 10 \u2192 6 are unchanged\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestValidator\",\"ProcessingConfig\"],\"outOfScope\":[\"Any configurable clock-skew tolerance or grace window (e.g. app.validation.future-tolerance); the check is strictly > now\",\"Flagging suspiciously old timestamps or implausible date ranges\",\"Accepting future-dated requests with a warning instead of rejecting them\",\"Checking timestamps in the deduplicate or prioritize stages, or changing the sort order\",\"Changing WorkRequestProcessor, DuplicateResolver, WorkRequestSorter or RequestMapper signatures or behaviour\",\"Rewriting sample-batch.json to include a future-dated request\",\"Per-sending-site clock diagnostics, aggregate clock-drift metrics, or new API endpoints/fields beyond the existing problem representation\",\"Time-zone conversion or normalising requestedAt values\"],\"title\":\"Flag requests with a future requestedAt as SUSPICIOUS_TIMESTAMP\"}",
+  "data": {
+    "criteria": [
+      {
+        "given": "a validator built with Clock.fixed(Instant.parse(\"2026-10-20T12:00:00Z\"), ZoneOffset.UTC) and a batch containing one otherwise-valid request whose requestedAt is 2026-10-20T12:00:01Z",
+        "when": "validate(batch) runs",
+        "then": "the StageResult problems contain exactly one Problem with code ProblemCode.SUSPICIOUS_TIMESTAMP, field \"requestedAt\", the request's requestId, inputIndex 0, null relatedRequestId/escalatedFrom/escalatedTo, and the request is NOT in StageResult.requests()"
+      },
+      {
+        "given": "a validator built with a clock fixed at 2026-10-20T12:00:00Z",
+        "when": "validating requests whose requestedAt is exactly 2026-10-20T12:00:00Z, or earlier (e.g. 2026-10-20T11:59:59.999Z)",
+        "then": "no SUSPICIOUS_TIMESTAMP problem is reported and the requests are accepted; only an instant strictly after the clock instant (including 2026-10-20T12:00:00.000000001Z) is treated as future \u2014 there is no tolerance window"
+      },
+      {
+        "given": "the clock instant is 2026-10-20T12:00:00Z",
+        "when": "a request WR-1 with requestedAt 2026-10-21T08:30:00Z is validated",
+        "then": "the problem message is exactly \"WR-1 has requestedAt 2026-10-21T08:30:00Z in the future\" (requestId, then \" has requestedAt \", the Instant.toString() of requestedAt, then \" in the future\"), and it never mentions the input index"
+      },
+      {
+        "given": "a request whose requestId is null or blank and whose requestedAt is in the future",
+        "when": "it is validated",
+        "then": "a SUSPICIOUS_TIMESTAMP problem is still reported with requestId null and message \"Request has requestedAt <instant> in the future\", in addition to the MISSING_FIELD problem for requestId"
+      },
+      {
+        "given": "a request with requestedAt null, or with requestedAt supplied through invalidFieldsByIndex as an unreadable raw value",
+        "when": "it is validated",
+        "then": "only MISSING_FIELD (respectively INVALID_VALUE) is reported for field \"requestedAt\" and no SUSPICIOUS_TIMESTAMP problem is produced, because the future check needs a parsed instant"
+      },
+      {
+        "given": "a request that is missing equipmentId and also has a future requestedAt",
+        "when": "it is validated",
+        "then": "both problems are reported for that input index, with the MISSING_FIELD problems (produced in field order requestId, equipmentId, priority, requestedAt, description) first and the SUSPICIOUS_TIMESTAMP problem last for that request"
+      },
+      {
+        "given": "a batch where a future-dated request is rejected",
+        "when": "validate completes",
+        "then": "the validate StageTrace has in = batch size, out = number of accepted requests (the future-dated one excluded), and notes contain the sorted, index-free entry \"WR-1 rejected: future requestedAt\" (label \"Request without id\" when the id is blank), reusing the existing \"<label> rejected: <reasons>\" format with reasons joined by \", \""
+      },
+      {
+        "given": "a batch containing two requests with identical content, one dated in the past and one dated in the future, processed by WorkRequestProcessor with a fixed clock",
+        "when": "process(batch) runs",
+        "then": "the future-dated request is rejected in the validate stage with SUSPICIOUS_TIMESTAMP, it never reaches the deduplicate stage (no DUPLICATE problem and no priority escalation is reported for it), and the trace still has exactly three entries validate, deduplicate, prioritize"
+      },
+      {
+        "given": "a batch containing several future-dated requests at different positions, shuffled repeatedly",
+        "when": "process(batch) runs with the same fixed clock",
+        "then": "the accepted queue, the problem list and the trace notes are identical for every ordering; the SUSPICIOUS_TIMESTAMP problems appear in the validate-stage block ordered by inputIndex"
+      },
+      {
+        "given": "the clock is read for the batch",
+        "when": "validate(List) or validate(List, Map) is called",
+        "then": "clock.instant() is consulted once per call so every request in one batch is compared against the same instant"
+      },
+      {
+        "given": "existing code and tests that call new WorkRequestValidator()",
+        "when": "the class is compiled and used",
+        "then": "the no-arg constructor still exists and behaves as if constructed with Clock.systemUTC(); a new constructor WorkRequestValidator(Clock clock) is added and throws NullPointerException with message \"clock\" when given null"
+      },
+      {
+        "given": "the Spring application context",
+        "when": "it starts with no overriding bean",
+        "then": "ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC(), and the workRequestValidator bean is built with that Clock; no new configuration property is introduced"
+      },
+      {
+        "given": "the ProblemCode enum",
+        "when": "ProblemCode.values() is read",
+        "then": "it contains SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID), so existing constants keep their order, BatchObserver gets one counter per code including the new one, and ProblemDto serialises the code as the string \"SUSPICIOUS_TIMESTAMP\" with field \"requestedAt\""
+      },
+      {
+        "given": "the pinned 13-request sample batch (all requestedAt on 2026-10-20) processed with the production system clock after 2026-10-20",
+        "when": "process runs",
+        "then": "no SUSPICIOUS_TIMESTAMP problem is produced and the pinned queue, problems and trace counts 13 \u2192 10 \u2192 6 are unchanged"
+      }
+    ],
+    "affectedClasses": [
+      "ProblemCode",
+      "Problem",
+      "WorkRequestValidator",
+      "ProcessingConfig"
+    ],
+    "outOfScope": [
+      "Any configurable clock-skew tolerance or grace window (e.g. app.validation.future-tolerance); the check is strictly > now",
+      "Flagging suspiciously old timestamps or implausible date ranges",
+      "Accepting future-dated requests with a warning instead of rejecting them",
+      "Checking timestamps in the deduplicate or prioritize stages, or changing the sort order",
+      "Changing WorkRequestProcessor, DuplicateResolver, WorkRequestSorter or RequestMapper signatures or behaviour",
+      "Rewriting sample-batch.json to include a future-dated request",
+      "Per-sending-site clock diagnostics, aggregate clock-drift metrics, or new API endpoints/fields beyond the existing problem representation",
+      "Time-zone conversion or normalising requestedAt values"
+    ],
+    "title": "Flag requests with a future requestedAt as SUSPICIOUS_TIMESTAMP"
+  },
+  "raw": {
+    "is_error": false,
+    "duration_api_ms": 62476,
+    "num_turns": 2,
+    "stop_reason": "tool_use",
+    "session_id": "3a5b1136-baf5-4430-9481-aac8478bbc85",
+    "total_cost_usd": 0.26431400000000005,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 13269,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 4962,
+      "output_tokens_details": {
+        "thinking_tokens": 2543
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 13269,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "global",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 4962,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 13269,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 13269
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 7504,
+        "outputTokens": 12,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 0.007564,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty"
+      },
+      "claude-opus-5": {
+        "inputTokens": 2,
+        "outputTokens": 4962,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 13269,
+        "webSearchRequests": 0,
+        "costUSD": 0.25675000000000003,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 64000,
+        "canonicalModel": "claude-opus-5",
+        "provider": "firstParty"
+      }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "{\"criteria\":[{\"given\":\"a validator built with Clock.fixed(Instant.parse(\\\"2026-10-20T12:00:00Z\\\"), ZoneOffset.UTC) and a batch containing one otherwise-valid request whose requestedAt is 2026-10-20T12:00:01Z\",\"when\":\"validate(batch) runs\",\"then\":\"the StageResult problems contain exactly one Problem with code ProblemCode.SUSPICIOUS_TIMESTAMP, field \\\"requestedAt\\\", the request's requestId, inputIndex 0, null relatedRequestId/escalatedFrom/escalatedTo, and the request is NOT in StageResult.requests()\"},{\"given\":\"a validator built with a clock fixed at 2026-10-20T12:00:00Z\",\"when\":\"validating requests whose requestedAt is exactly 2026-10-20T12:00:00Z, or earlier (e.g. 2026-10-20T11:59:59.999Z)\",\"then\":\"no SUSPICIOUS_TIMESTAMP problem is reported and the requests are accepted; only an instant strictly after the clock instant (including 2026-10-20T12:00:00.000000001Z) is treated as future \u2014 there is no tolerance window\"},{\"given\":\"the clock instant is 2026-10-20T12:00:00Z\",\"when\":\"a request WR-1 with requestedAt 2026-10-21T08:30:00Z is validated\",\"then\":\"the problem message is exactly \\\"WR-1 has requestedAt 2026-10-21T08:30:00Z in the future\\\" (requestId, then \\\" has requestedAt \\\", the Instant.toString() of requestedAt, then \\\" in the future\\\"), and it never mentions the input index\"},{\"given\":\"a request whose requestId is null or blank and whose requestedAt is in the future\",\"when\":\"it is validated\",\"then\":\"a SUSPICIOUS_TIMESTAMP problem is still reported with requestId null and message \\\"Request has requestedAt <instant> in the future\\\", in addition to the MISSING_FIELD problem for requestId\"},{\"given\":\"a request with requestedAt null, or with requestedAt supplied through invalidFieldsByIndex as an unreadable raw value\",\"when\":\"it is validated\",\"then\":\"only MISSING_FIELD (respectively INVALID_VALUE) is reported for field \\\"requestedAt\\\" and no SUSPICIOUS_TIMESTAMP problem is produced, because the future check needs a parsed instant\"},{\"given\":\"a request that is missing equipmentId and also has a future requestedAt\",\"when\":\"it is validated\",\"then\":\"both problems are reported for that input index, with the MISSING_FIELD problems (produced in field order requestId, equipmentId, priority, requestedAt, description) first and the SUSPICIOUS_TIMESTAMP problem last for that request\"},{\"given\":\"a batch where a future-dated request is rejected\",\"when\":\"validate completes\",\"then\":\"the validate StageTrace has in = batch size, out = number of accepted requests (the future-dated one excluded), and notes contain the sorted, index-free entry \\\"WR-1 rejected: future requestedAt\\\" (label \\\"Request without id\\\" when the id is blank), reusing the existing \\\"<label> rejected: <reasons>\\\" format with reasons joined by \\\", \\\"\"},{\"given\":\"a batch containing two requests with identical content, one dated in the past and one dated in the future, processed by WorkRequestProcessor with a fixed clock\",\"when\":\"process(batch) runs\",\"then\":\"the future-dated request is rejected in the validate stage with SUSPICIOUS_TIMESTAMP, it never reaches the deduplicate stage (no DUPLICATE problem and no priority escalation is reported for it), and the trace still has exactly three entries validate, deduplicate, prioritize\"},{\"given\":\"a batch containing several future-dated requests at different positions, shuffled repeatedly\",\"when\":\"process(batch) runs with the same fixed clock\",\"then\":\"the accepted queue, the problem list and the trace notes are identical for every ordering; the SUSPICIOUS_TIMESTAMP problems appear in the validate-stage block ordered by inputIndex\"},{\"given\":\"the clock is read for the batch\",\"when\":\"validate(List) or validate(List, Map) is called\",\"then\":\"clock.instant() is consulted once per call so every request in one batch is compared against the same instant\"},{\"given\":\"existing code and tests that call new WorkRequestValidator()\",\"when\":\"the class is compiled and used\",\"then\":\"the no-arg constructor still exists and behaves as if constructed with Clock.systemUTC(); a new constructor WorkRequestValidator(Clock clock) is added and throws NullPointerException with message \\\"clock\\\" when given null\"},{\"given\":\"the Spring application context\",\"when\":\"it starts with no overriding bean\",\"then\":\"ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC(), and the workRequestValidator bean is built with that Clock; no new configuration property is introduced\"},{\"given\":\"the ProblemCode enum\",\"when\":\"ProblemCode.values() is read\",\"then\":\"it contains SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID), so existing constants keep their order, BatchObserver gets one counter per code including the new one, and ProblemDto serialises the code as the string \\\"SUSPICIOUS_TIMESTAMP\\\" with field \\\"requestedAt\\\"\"},{\"given\":\"the pinned 13-request sample batch (all requestedAt on 2026-10-20) processed with the production system clock after 2026-10-20\",\"when\":\"process runs\",\"then\":\"no SUSPICIOUS_TIMESTAMP problem is produced and the pinned queue, problems and trace counts 13 \u2192 10 \u2192 6 are unchanged\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestValidator\",\"ProcessingConfig\"],\"outOfScope\":[\"Any configurable clock-skew tolerance or grace window (e.g. app.validation.future-tolerance); the check is strictly > now\",\"Flagging suspiciously old timestamps or implausible date ranges\",\"Accepting future-dated requests with a warning instead of rejecting them\",\"Checking timestamps in the deduplicate or prioritize stages, or changing the sort order\",\"Changing WorkRequestProcessor, DuplicateResolver, WorkRequestSorter or RequestMapper signatures or behaviour\",\"Rewriting sample-batch.json to include a future-dated request\",\"Per-sending-site clock diagnostics, aggregate clock-drift metrics, or new API endpoints/fields beyond the existing problem representation\",\"Time-zone conversion or normalising requestedAt values\"],\"title\":\"Flag requests with a future requestedAt as SUSPICIOUS_TIMESTAMP\"}",
+    "structured_output": {
+      "criteria": [
+        {
+          "given": "a validator built with Clock.fixed(Instant.parse(\"2026-10-20T12:00:00Z\"), ZoneOffset.UTC) and a batch containing one otherwise-valid request whose requestedAt is 2026-10-20T12:00:01Z",
+          "when": "validate(batch) runs",
+          "then": "the StageResult problems contain exactly one Problem with code ProblemCode.SUSPICIOUS_TIMESTAMP, field \"requestedAt\", the request's requestId, inputIndex 0, null relatedRequestId/escalatedFrom/escalatedTo, and the request is NOT in StageResult.requests()"
+        },
+        {
+          "given": "a validator built with a clock fixed at 2026-10-20T12:00:00Z",
+          "when": "validating requests whose requestedAt is exactly 2026-10-20T12:00:00Z, or earlier (e.g. 2026-10-20T11:59:59.999Z)",
+          "then": "no SUSPICIOUS_TIMESTAMP problem is reported and the requests are accepted; only an instant strictly after the clock instant (including 2026-10-20T12:00:00.000000001Z) is treated as future \u2014 there is no tolerance window"
+        },
+        {
+          "given": "the clock instant is 2026-10-20T12:00:00Z",
+          "when": "a request WR-1 with requestedAt 2026-10-21T08:30:00Z is validated",
+          "then": "the problem message is exactly \"WR-1 has requestedAt 2026-10-21T08:30:00Z in the future\" (requestId, then \" has requestedAt \", the Instant.toString() of requestedAt, then \" in the future\"), and it never mentions the input index"
+        },
+        {
+          "given": "a request whose requestId is null or blank and whose requestedAt is in the future",
+          "when": "it is validated",
+          "then": "a SUSPICIOUS_TIMESTAMP problem is still reported with requestId null and message \"Request has requestedAt <instant> in the future\", in addition to the MISSING_FIELD problem for requestId"
+        },
+        {
+          "given": "a request with requestedAt null, or with requestedAt supplied through invalidFieldsByIndex as an unreadable raw value",
+          "when": "it is validated",
+          "then": "only MISSING_FIELD (respectively INVALID_VALUE) is reported for field \"requestedAt\" and no SUSPICIOUS_TIMESTAMP problem is produced, because the future check needs a parsed instant"
+        },
+        {
+          "given": "a request that is missing equipmentId and also has a future requestedAt",
+          "when": "it is validated",
+          "then": "both problems are reported for that input index, with the MISSING_FIELD problems (produced in field order requestId, equipmentId, priority, requestedAt, description) first and the SUSPICIOUS_TIMESTAMP problem last for that request"
+        },
+        {
+          "given": "a batch where a future-dated request is rejected",
+          "when": "validate completes",
+          "then": "the validate StageTrace has in = batch size, out = number of accepted requests (the future-dated one excluded), and notes contain the sorted, index-free entry \"WR-1 rejected: future requestedAt\" (label \"Request without id\" when the id is blank), reusing the existing \"<label> rejected: <reasons>\" format with reasons joined by \", \""
+        },
+        {
+          "given": "a batch containing two requests with identical content, one dated in the past and one dated in the future, processed by WorkRequestProcessor with a fixed clock",
+          "when": "process(batch) runs",
+          "then": "the future-dated request is rejected in the validate stage with SUSPICIOUS_TIMESTAMP, it never reaches the deduplicate stage (no DUPLICATE problem and no priority escalation is reported for it), and the trace still has exactly three entries validate, deduplicate, prioritize"
+        },
+        {
+          "given": "a batch containing several future-dated requests at different positions, shuffled repeatedly",
+          "when": "process(batch) runs with the same fixed clock",
+          "then": "the accepted queue, the problem list and the trace notes are identical for every ordering; the SUSPICIOUS_TIMESTAMP problems appear in the validate-stage block ordered by inputIndex"
+        },
+        {
+          "given": "the clock is read for the batch",
+          "when": "validate(List) or validate(List, Map) is called",
+          "then": "clock.instant() is consulted once per call so every request in one batch is compared against the same instant"
+        },
+        {
+          "given": "existing code and tests that call new WorkRequestValidator()",
+          "when": "the class is compiled and used",
+          "then": "the no-arg constructor still exists and behaves as if constructed with Clock.systemUTC(); a new constructor WorkRequestValidator(Clock clock) is added and throws NullPointerException with message \"clock\" when given null"
+        },
+        {
+          "given": "the Spring application context",
+          "when": "it starts with no overriding bean",
+          "then": "ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC(), and the workRequestValidator bean is built with that Clock; no new configuration property is introduced"
+        },
+        {
+          "given": "the ProblemCode enum",
+          "when": "ProblemCode.values() is read",
+          "then": "it contains SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID), so existing constants keep their order, BatchObserver gets one counter per code including the new one, and ProblemDto serialises the code as the string \"SUSPICIOUS_TIMESTAMP\" with field \"requestedAt\""
+        },
+        {
+          "given": "the pinned 13-request sample batch (all requestedAt on 2026-10-20) processed with the production system clock after 2026-10-20",
+          "when": "process runs",
+          "then": "no SUSPICIOUS_TIMESTAMP problem is produced and the pinned queue, problems and trace counts 13 \u2192 10 \u2192 6 are unchanged"
+        }
+      ],
+      "affectedClasses": [
+        "ProblemCode",
+        "Problem",
+        "WorkRequestValidator",
+        "ProcessingConfig"
+      ],
+      "outOfScope": [
+        "Any configurable clock-skew tolerance or grace window (e.g. app.validation.future-tolerance); the check is strictly > now",
+        "Flagging suspiciously old timestamps or implausible date ranges",
+        "Accepting future-dated requests with a warning instead of rejecting them",
+        "Checking timestamps in the deduplicate or prioritize stages, or changing the sort order",
+        "Changing WorkRequestProcessor, DuplicateResolver, WorkRequestSorter or RequestMapper signatures or behaviour",
+        "Rewriting sample-batch.json to include a future-dated request",
+        "Per-sending-site clock diagnostics, aggregate clock-drift metrics, or new API endpoints/fields beyond the existing problem representation",
+        "Time-zone conversion or normalising requestedAt values"
+      ],
+      "title": "Flag requests with a future requestedAt as SUSPICIOUS_TIMESTAMP"
+    },
+    "ttft_ms": 35892,
+    "ttft_stream_ms": 1389,
+    "time_to_request_ms": 14,
+    "type": "result",
+    "duration_ms": 61604,
+    "uuid": "3c19438b-277a-46c7-84e1-e6bea529a2ca"
+  }
+}

@@ -87,6 +87,15 @@ def stop(data: dict[str, Any], stage: str, reason: str) -> None:
     data.update(outcome="stopped", stoppedAt=stage, reason=reason)
 
 
+def branch_moved(branch: str, expected_head: str) -> str | None:
+    """Why the run must stop if someone committed or switched branches during it, else None."""
+    actual_branch, actual_head = gitops.current_branch(), gitops.head_sha()
+    if actual_branch == branch and actual_head == expected_head:
+        return None
+    return (f"{branch} changed outside the pipeline: expected {expected_head[:7]} on {branch}, found "
+            f"{actual_head[:7]} on {actual_branch}. Don't commit or switch branches while a run is in progress.")
+
+
 def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch: bool) -> None:
     data = log.data
     try:
@@ -97,6 +106,7 @@ def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch:
 
     branch = BRANCH_PREFIX + story_id
     gitops.create_branch(branch, BASE_BRANCH, replace=replace_branch)
+    expected_head = gitops.head_sha()
     minimum_tests = count_test_methods(TEST_JAVA)
     feedback: implement.Feedback | None = None
     tests_written = False
@@ -112,6 +122,8 @@ def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch:
             return stop(data, failure.stage, failure.reason)
         record.update(summary=output["summary"], uncertainties=output["uncertainties"],
                       diffLines=diff_size(output["diff"]))
+        if moved := branch_moved(branch, expected_head):
+            return stop(data, "branch-check", moved)
 
         applied, problems, warnings = apply_checked(log, f"implement-{attempt}.diff", output["diff"], ALLOWED_PREFIX,
                                                     minimum_tests)
@@ -124,8 +136,8 @@ def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch:
             feedback = implement.Feedback(attempt, "Rejected before the gate:\n" + "\n".join(problems), output["diff"])
             continue
         record["applied"] = True
-        gitops.commit_backend_src(f"agent({story_id}): implement, attempt {attempt}\n\n{output['summary']}\n\n"
-                                  f"{COMMIT_TRAILER}")
+        expected_head = gitops.commit_backend_src(
+            f"agent({story_id}): implement, attempt {attempt}\n\n{output['summary']}\n\n{COMMIT_TRAILER}")
         minimum_tests = count_test_methods(TEST_JAVA)
 
         if not tests_written:
@@ -133,23 +145,29 @@ def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch:
                 tests = write_tests.run(llm, log, criteria)
             except StageFailed as failure:
                 return stop(data, failure.stage, failure.reason)
+            if moved := branch_moved(branch, expected_head):
+                return stop(data, "branch-check", moved)
             applied, problems, warnings = apply_checked(log, "tests.diff", tests["diff"], TEST_PREFIX, minimum_tests)
             data["tests"] = {"summary": tests["summary"], "testNames": added_test_names(tests["diff"]),
                              "diffLines": diff_size(tests["diff"]), "violations": problems, "warnings": warnings}
             if not applied:
                 return stop(data, "write-tests", "; ".join(problems))
-            gitops.commit_backend_src(f"agent({story_id}): tests from the acceptance criteria\n\n{tests['summary']}"
-                                      f"\n\n{COMMIT_TRAILER}")
+            expected_head = gitops.commit_backend_src(
+                f"agent({story_id}): tests from the acceptance criteria\n\n{tests['summary']}\n\n{COMMIT_TRAILER}")
             minimum_tests = count_test_methods(TEST_JAVA)
             tests_written = True
 
+        if moved := branch_moved(branch, expected_head):
+            return stop(data, "branch-check", moved)
         result = run_gate()
         log.write(f"gate-{attempt}.log", result.output or "(no output: every test passed)")
         data["gateAttempts"].append({"attempt": attempt, "passed": result.passed, "failingTest": result.failing_test,
                                      "exitCode": result.exit_code, "durationSeconds": result.duration_seconds,
                                      "output": result.failure_summary[:4000]})
+        if moved := branch_moved(branch, expected_head):  # Someone may have committed during the gate.
+            return stop(data, "branch-check", moved)
         if result.passed:
-            final_diff = gitops.diff_between(BASE_BRANCH)
+            final_diff = gitops.diff_between(data["baseCommit"])
             log.write("final.diff", final_diff)
             data["finalDiffLines"] = diff_size(final_diff)
             data["outcome"] = "passed"
@@ -162,7 +180,7 @@ def run_stages(llm: Llm, log: RunLog, story_id: str, story: str, replace_branch:
             return None
         feedback = implement.Feedback(attempt, result.failure_summary, output["diff"], files_named_in(result.output))
 
-    final_diff = gitops.diff_between(BASE_BRANCH)
+    final_diff = gitops.diff_between(data["baseCommit"])
     log.write("final.diff", final_diff or "(nothing committed)")
     data["finalDiffLines"] = diff_size(final_diff)
     return stop(data, "gate", f"no attempt passed the gate in {MAX_IMPLEMENT_ATTEMPTS} tries")

@@ -10,6 +10,7 @@ import pytest
 
 import gitops
 import llm
+import pipeline
 from codebase import files_named_in
 from pipeline import load_story
 from report import summary_markdown, what_failed
@@ -101,7 +102,13 @@ class TestReport:
         assert "- Not reviewed yet." in text
 
     def test_summary_includes_review_notes_once_given(self):
-        assert "- Fixed the clock" in summary_markdown(self.RUN, manual_fixes=["Fixed the clock"])
+        text = summary_markdown(self.RUN, manual_fixes=["Fixed the clock"], review_notes=["Backend fine"])
+        assert "- Fixed the clock" in text
+        assert "## Review notes" in text and "- Backend fine" in text
+        assert "Not reviewed yet" not in text
+
+    def test_a_review_with_no_fixes_says_so(self):
+        assert "- None needed." in summary_markdown(self.RUN, manual_fixes=[], review_notes=["ok"])
 
 
 class TestClaudeCliBackend:
@@ -167,6 +174,24 @@ class TestGitSafety:
         monkeypatch.setattr(gitops, "git", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, porcelain, ""))
         assert gitops.changed_paths() == ["backend/src/main/java/A.java"]
         assert len(gitops.changed_paths(include_run_logs=True)) == 2
+
+
+class TestBranchGuard:
+    def test_passes_while_the_branch_is_where_the_pipeline_left_it(self, monkeypatch):
+        monkeypatch.setattr(gitops, "current_branch", lambda: "agent/x")
+        monkeypatch.setattr(gitops, "head_sha", lambda: "abc1234def")
+        assert pipeline.branch_moved("agent/x", "abc1234def") is None
+
+    def test_stops_when_someone_commits_during_a_run(self, monkeypatch):
+        monkeypatch.setattr(gitops, "current_branch", lambda: "agent/x")
+        monkeypatch.setattr(gitops, "head_sha", lambda: "fff9999aaa")
+        reason = pipeline.branch_moved("agent/x", "abc1234def")
+        assert reason and "changed outside the pipeline" in reason and "fff9999" in reason
+
+    def test_stops_when_someone_switches_branches_during_a_run(self, monkeypatch):
+        monkeypatch.setattr(gitops, "current_branch", lambda: "main")
+        monkeypatch.setattr(gitops, "head_sha", lambda: "abc1234def")
+        assert "found abc1234 on main" in pipeline.branch_moved("agent/x", "abc1234def")
 
 
 class TestStories:
