@@ -24,21 +24,33 @@
     </properties>
 
     <dependencies>
-        <!-- Brings JUnit 5, Mockito, and AssertJ with versions managed by the Boot BOM. -->
+        <!-- Spring MVC, embedded Tomcat, and Jackson (incl. JSR-310 for Instant). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Health endpoint and Micrometer metrics. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Brings JUnit 5, Mockito, AssertJ, and MockMvc with versions managed by the Boot BOM. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Jackson for RequestMapper; replaced by spring-boot-starter-web, which includes it. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-json</artifactId>
-        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- Packages an executable jar for `java -jar` and the Docker image. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
             <!-- Fail fast if the build runs on anything other than JDK 21. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
