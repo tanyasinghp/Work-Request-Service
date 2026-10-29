@@ -5,6 +5,7 @@ import com.tanya.workrequests.domain.StageTrace;
 import com.tanya.workrequests.domain.WorkRequest;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -28,9 +29,11 @@ public class WorkRequestValidator {
                 valid.add(new IndexedRequest(index, request));
             } else {
                 problems.addAll(requestProblems);
-                notes.add(rejectionNote(index, requestProblems));
+                notes.add(rejectionNote(request, requestProblems));
             }
         }
+        // Sorted, and free of input indices, so the trace is identical whatever the input order.
+        notes.sort(Comparator.naturalOrder());
 
         StageTrace trace = new StageTrace(STAGE, batch.size(), valid.size(), notes);
         return new StageResult(valid, problems, trace);
@@ -66,11 +69,14 @@ public class WorkRequestValidator {
         return value == null || value.isBlank();
     }
 
-    private static String rejectionNote(int index, List<Problem> problems) {
+    private static String rejectionNote(WorkRequest request, List<Problem> problems) {
+        if (request == null) {
+            return "Null request rejected";
+        }
         Problem first = problems.get(0);
-        String label = first.requestId() != null ? first.requestId() : "Request at index " + index;
+        String label = first.requestId() != null ? first.requestId() : "Request without id";
         String reasons = problems.stream()
-                .map(problem -> problem.field() != null ? "missing " + problem.field() : "null request")
+                .map(problem -> "missing " + problem.field())
                 .collect(Collectors.joining(", "));
         return label + " rejected: " + reasons;
     }

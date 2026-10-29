@@ -130,8 +130,24 @@ class WorkRequestValidatorTest {
         assertThat(result.trace().in()).isEqualTo(4);
         assertThat(result.trace().out()).isEqualTo(2);
         assertThat(result.trace().notes()).containsExactly(
-                "Request at index 1 rejected: null request",
-                "Request at index 2 rejected: missing requestId, missing equipmentId");
+                "Null request rejected",
+                "Request without id rejected: missing requestId, missing equipmentId");
+    }
+
+    @Test
+    void sortsTraceNotesByTextSoInputOrderDoesNotMatter() {
+        WorkRequest missingEquipment = request("REQ-9", null, Priority.LOW, DEFAULT_TIME, "Light out");
+        WorkRequest missingPriority = request("REQ-2", "FAN-1", null, DEFAULT_TIME, "Belt squeal");
+        List<WorkRequest> batch = Arrays.asList(missingEquipment, valid("REQ-1"), null, missingPriority);
+        List<WorkRequest> reversed = Arrays.asList(missingPriority, null, valid("REQ-1"), missingEquipment);
+
+        List<String> notes = validator.validate(batch).trace().notes();
+
+        assertThat(notes).containsExactly(
+                "Null request rejected",
+                "REQ-2 rejected: missing priority",
+                "REQ-9 rejected: missing equipmentId");
+        assertThat(validator.validate(reversed).trace().notes()).isEqualTo(notes);
     }
 
     @Test
