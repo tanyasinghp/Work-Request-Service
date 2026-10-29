@@ -1,5 +1,6 @@
 package com.tanya.workrequests.processing;
 
+import com.tanya.workrequests.domain.InvalidField;
 import com.tanya.workrequests.domain.Priority;
 import com.tanya.workrequests.domain.Problem;
 import com.tanya.workrequests.domain.ProblemCode;
@@ -11,6 +12,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static com.tanya.workrequests.processing.TestRequests.DEFAULT_TIME;
@@ -158,6 +160,58 @@ class WorkRequestValidatorTest {
         assertThat(result.problems()).isEmpty();
         assertThat(result.trace().in()).isZero();
         assertThat(result.trace().out()).isZero();
+    }
+
+    @Test
+    void reportsInvalidValueInsteadOfMissingField() {
+        WorkRequest unreadablePriority = request("REQ-7", "PUMP-7", null, DEFAULT_TIME, "Pump leaking");
+
+        StageResult result = validator.validate(List.of(unreadablePriority),
+                Map.of(0, List.of(new InvalidField("priority", "URGENT"))));
+
+        assertThat(result.requests()).isEmpty();
+        assertThat(result.problems()).containsExactly(Problem.invalidValue(0, "REQ-7", "priority", "URGENT"));
+        assertThat(result.problems().get(0).message()).isEqualTo("REQ-7 has invalid priority 'URGENT'");
+    }
+
+    @Test
+    void reportsInvalidAndMissingFieldsInFieldOrder() {
+        WorkRequest request = request("REQ-7", null, null, null, "Pump leaking");
+
+        StageResult result = validator.validate(List.of(request),
+                Map.of(0, List.of(new InvalidField("requestedAt", "soon"), new InvalidField("priority", "3"))));
+
+        assertThat(result.problems()).containsExactly(
+                Problem.missingField(0, "REQ-7", "equipmentId"),
+                Problem.invalidValue(0, "REQ-7", "priority", "3"),
+                Problem.invalidValue(0, "REQ-7", "requestedAt", "soon"));
+        assertThat(result.trace().notes())
+                .containsExactly("REQ-7 rejected: missing equipmentId, invalid priority, invalid requestedAt");
+    }
+
+    @Test
+    void reportsInvalidRequestIdAsARequestWithoutId() {
+        WorkRequest request = request(null, "PUMP-7", Priority.HIGH, DEFAULT_TIME, "Pump leaking");
+
+        StageResult result = validator.validate(List.of(request),
+                Map.of(0, List.of(new InvalidField("requestId", "42"))));
+
+        assertThat(result.problems()).containsExactly(Problem.invalidValue(0, null, "requestId", "42"));
+        assertThat(result.trace().notes()).containsExactly("Request without id rejected: invalid requestId");
+    }
+
+    @Test
+    void appliesInvalidFieldsOnlyAtTheirOwnIndex() {
+        WorkRequest unreadable = request("REQ-2", "FAN-1", null, DEFAULT_TIME, "Belt squeal");
+        WorkRequest missing = request("REQ-3", "DOOR-5", null, DEFAULT_TIME, "Lock jammed");
+
+        StageResult result = validator.validate(Arrays.asList(valid("REQ-1"), unreadable, missing),
+                Map.of(1, List.of(new InvalidField("priority", "URGENT"))));
+
+        assertThat(result.requests()).extracting(IndexedRequest::inputIndex).containsExactly(0);
+        assertThat(result.problems()).containsExactly(
+                Problem.invalidValue(1, "REQ-2", "priority", "URGENT"),
+                Problem.missingField(2, "REQ-3", "priority"));
     }
 
     private static WorkRequest withStringField(String field, String value) {
