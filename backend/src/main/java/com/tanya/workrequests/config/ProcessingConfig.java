@@ -8,6 +8,8 @@ import com.tanya.workrequests.processing.WorkRequestValidator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Clock;
+
 /**
  * Wires the framework-free processing classes. Every stage is stateless, so one shared
  * instance of each (Spring's default singleton scope) is safe across concurrent requests.
@@ -15,14 +17,22 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class ProcessingConfig {
 
+    /**
+     * The single source of "now" for processing, so tests can pin it with {@code Clock.fixed}.
+     */
+    @Bean
+    Clock clock() {
+        return Clock.systemUTC();
+    }
+
     @Bean
     DescriptionNormalizer descriptionNormalizer() {
         return new DescriptionNormalizer();
     }
 
     @Bean
-    WorkRequestValidator workRequestValidator() {
-        return new WorkRequestValidator();
+    WorkRequestValidator workRequestValidator(Clock clock, StalenessProperties stalenessProperties) {
+        return new WorkRequestValidator(clock, stalenessProperties.maxAge());
     }
 
     @Bean

@@ -1,5 +1,7 @@
 package com.tanya.workrequests.domain;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -68,6 +70,16 @@ public record Problem(int inputIndex,
     public static Problem conflictingRequestId(int inputIndex, String requestId) {
         return new Problem(inputIndex, requestId, ProblemCode.CONFLICTING_REQUEST_ID, null, null, null, null,
                 "Request id " + requestId + " is used by requests with different content");
+    }
+
+    /**
+     * A request whose {@code requestedAt} is older than the configured maximum age. The message
+     * quotes the age in whole days because that is how the threshold is configured.
+     */
+    public static Problem stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge) {
+        return new Problem(inputIndex, requestId, ProblemCode.STALE, "requestedAt", null, null, null,
+                subject(requestId) + " is stale: requestedAt " + requestedAt
+                        + " is more than " + maxAge.toDays() + " days old");
     }
 
     private static String subject(String requestId) {

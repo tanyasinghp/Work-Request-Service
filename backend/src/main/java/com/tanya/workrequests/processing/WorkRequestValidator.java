@@ -6,19 +6,47 @@ import com.tanya.workrequests.domain.ProblemCode;
 import com.tanya.workrequests.domain.StageTrace;
 import com.tanya.workrequests.domain.WorkRequest;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
  * Rejects null, incomplete, and unreadable requests. Every missing or invalid field is its
  * own problem, so a request with two bad fields reports both. Blank strings count as missing.
+ *
+ * <p>When built with a {@link Clock} and a maximum age, a request whose {@code requestedAt} is
+ * older than that age is also rejected as STALE. Staleness is only checked for requests whose
+ * fields are all present and readable, so a STALE problem always carries a request id.
  */
 public class WorkRequestValidator {
 
     static final String STAGE = "validate";
+
+    // A threshold below one day would make "n days old" messages meaningless.
+    private static final Duration MIN_MAX_AGE = Duration.ofDays(1);
+
+    private final Clock clock;
+    private final Duration maxAge;
+
+    /** Validates fields only; no staleness check. Kept for callers that have no clock. */
+    public WorkRequestValidator() {
+        this.clock = null;
+        this.maxAge = null;
+    }
+
+    public WorkRequestValidator(Clock clock, Duration maxAge) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.maxAge = Objects.requireNonNull(maxAge, "maxAge");
+        if (maxAge.compareTo(MIN_MAX_AGE) < 0) {
+            throw new IllegalArgumentException("maxAge must be at least 1 day");
+        }
+    }
 
     public StageResult validate(List<WorkRequest> batch) {
         return validate(batch, Map.of());
@@ -32,23 +60,39 @@ public class WorkRequestValidator {
         List<IndexedRequest> valid = new ArrayList<>();
         List<Problem> problems = new ArrayList<>();
         List<String> notes = new ArrayList<>();
+        // Read once per call so every request in the batch is judged against the same "now".
+        Instant staleCutoff = staleCutoff();
 
         for (int index = 0; index < batch.size(); index++) {
             WorkRequest request = batch.get(index);
             List<InvalidField> invalidFields = invalidFieldsByIndex.getOrDefault(index, List.of());
             List<Problem> requestProblems = problemsFor(index, request, invalidFields);
-            if (requestProblems.isEmpty()) {
-                valid.add(new IndexedRequest(index, request));
-            } else {
+            if (!requestProblems.isEmpty()) {
                 problems.addAll(requestProblems);
                 notes.add(rejectionNote(request, requestProblems));
+                continue;
             }
+            if (isStale(request, staleCutoff)) {
+                problems.add(Problem.stale(index, request.requestId(), request.requestedAt(), maxAge));
+                notes.add(request.requestId() + " rejected: stale");
+                continue;
+            }
+            valid.add(new IndexedRequest(index, request));
         }
         // Sorted, and free of input indices, so the trace is identical whatever the input order.
         notes.sort(Comparator.naturalOrder());
 
         StageTrace trace = new StageTrace(STAGE, batch.size(), valid.size(), notes);
         return new StageResult(valid, problems, trace);
+    }
+
+    private Instant staleCutoff() {
+        return clock == null ? null : clock.instant().minus(maxAge);
+    }
+
+    /** Strictly older than the cutoff; a request exactly at the limit, or in the future, is fine. */
+    private static boolean isStale(WorkRequest request, Instant staleCutoff) {
+        return staleCutoff != null && request.requestedAt().isBefore(staleCutoff);
     }
 
     private static List<Problem> problemsFor(int index, WorkRequest request, List<InvalidField> invalidFields) {
