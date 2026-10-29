@@ -76,6 +76,9 @@ class ClaudeCli:
                 raise LlmError("the `claude` CLI is not installed or not on PATH") from error
             returncode, stdout, stderr = self._wait(process, prompt)
         if returncode != 0:
+            failure = _parse_json(stdout.splitlines()[0]) if stdout.strip() else None
+            if isinstance(failure, dict) and failure.get("api_error_status") == 429:
+                raise LlmError(f"usage limit reached (HTTP 429): {failure.get('result')}")
             raise LlmError(f"claude -p exited {returncode}: {(stderr or stdout)[-2000:]}")
         payload = _parse_json(stdout)
         if not isinstance(payload, dict):
