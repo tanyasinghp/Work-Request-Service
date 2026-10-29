@@ -15,8 +15,9 @@ jacoco.exec
 .env
 .env.*
 
-# Logs
+# Logs (except agent-pipeline run logs, which are the record of each run)
 *.log
+!agent-pipeline/runs/**/*.log
 
 # IDE
 .idea/
