@@ -152,7 +152,13 @@ class TestGitSafety:
         assert calls, "expected git(...) calls"
         assert not {"merge", "push", "rebase", "reset", "pull", "fetch", "remote"} & set(calls)
 
-    def test_only_creates_branches_under_agent(self):
+    def test_only_creates_branches_under_agent(self, monkeypatch):
+        # Never let this test reach real git: an earlier version, under a mutation that removed
+        # the check, really did run `git switch -c` in the developer's checkout.
+        def no_git(*args, **kwargs):
+            raise AssertionError(f"git must not run here: {args}")
+
+        monkeypatch.setattr(gitops, "git", no_git)
         with pytest.raises(gitops.GitError, match="agent/"):
             gitops.create_branch("main-copy", "main")
 
