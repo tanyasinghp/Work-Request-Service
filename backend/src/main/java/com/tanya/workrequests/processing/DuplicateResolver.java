@@ -120,10 +120,7 @@ public class DuplicateResolver {
                 : null;
 
         for (IndexedRequest indexed : dropped) {
-            String droppedId = indexed.request().requestId();
-            problems.add(indexed == escalatedBy
-                    ? Problem.duplicateWithEscalation(indexed.inputIndex(), droppedId, keptId, original, highest)
-                    : Problem.duplicate(indexed.inputIndex(), droppedId, keptId));
+            problems.add(duplicateProblem(indexed, keptId, indexed == escalatedBy, original, highest));
         }
         notes.add(keptId + " kept; merged duplicates " + dropped.stream()
                 .map(indexed -> indexed.request().requestId())
@@ -135,6 +132,19 @@ public class DuplicateResolver {
         notes.add(keptId + " escalated " + original + " to " + highest
                 + " (from " + escalatedBy.request().requestId() + ")");
         return new IndexedRequest(survivor.inputIndex(), survivor.request().withPriority(highest));
+    }
+
+    // An exact repeat can never be the escalating request: it has the kept request's priority.
+    private static Problem duplicateProblem(IndexedRequest dropped, String keptId, boolean escalated,
+                                            Priority from, Priority to) {
+        String droppedId = dropped.request().requestId();
+        if (droppedId.equals(keptId)) {
+            return Problem.exactRepeat(dropped.inputIndex(), droppedId);
+        }
+        if (escalated) {
+            return Problem.duplicateWithEscalation(dropped.inputIndex(), droppedId, keptId, from, to);
+        }
+        return Problem.duplicate(dropped.inputIndex(), droppedId, keptId);
     }
 
     private DuplicateKey keyOf(WorkRequest request) {

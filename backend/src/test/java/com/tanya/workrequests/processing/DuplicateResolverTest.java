@@ -143,7 +143,23 @@ class DuplicateResolverTest {
         StageResult result = resolver.resolve(indexed(request, request));
 
         assertThat(result.requests()).containsExactly(new IndexedRequest(0, request));
-        assertThat(result.problems()).containsExactly(Problem.duplicate(1, "REQ-1", "REQ-1"));
+        assertThat(result.problems())
+                .extracting(Problem::inputIndex, Problem::requestId, Problem::code,
+                        Problem::relatedRequestId, Problem::message)
+                .containsExactly(tuple(1, "REQ-1", ProblemCode.DUPLICATE, "REQ-1", "Exact repeat of REQ-1"));
+    }
+
+    @Test
+    void exactRepeatInEscalatedGroupKeepsItsOwnMessage() {
+        WorkRequest original = request("REQ-1", "PUMP-7", MEDIUM, T0800, "Pump leaking");
+        WorkRequest critical = request("REQ-2", "PUMP-7", CRITICAL, T0900, "Pump leaking");
+
+        StageResult result = resolver.resolve(indexed(original, critical, original));
+
+        assertThat(result.requests()).containsExactly(new IndexedRequest(0, original.withPriority(CRITICAL)));
+        assertThat(result.problems()).containsExactly(
+                Problem.duplicateWithEscalation(1, "REQ-2", "REQ-1", MEDIUM, CRITICAL),
+                Problem.exactRepeat(2, "REQ-1"));
     }
 
     @Test

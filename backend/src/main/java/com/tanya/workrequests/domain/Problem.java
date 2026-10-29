@@ -38,6 +38,12 @@ public record Problem(int inputIndex,
                 "Duplicate of " + keptRequestId);
     }
 
+    /** A byte-for-byte resend of a request that was kept; it points at itself. */
+    public static Problem exactRepeat(int inputIndex, String requestId) {
+        return new Problem(inputIndex, requestId, ProblemCode.DUPLICATE, null, requestId,
+                "Exact repeat of " + requestId);
+    }
+
     public static Problem duplicateWithEscalation(int inputIndex, String requestId, String keptRequestId,
                                                   Priority from, Priority to) {
         return new Problem(inputIndex, requestId, ProblemCode.DUPLICATE, null, keptRequestId,
