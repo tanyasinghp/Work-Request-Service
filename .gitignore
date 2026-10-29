@@ -22,3 +22,5 @@ jacoco.exec
 .idea/
 .vscode/
 docs/DECISIONS.md
+CLAUDE.md
+docs/SPEC.md
