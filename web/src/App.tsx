@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { cx } from './components/styles'
+import { AgentRunsTab } from './flows/AgentRunsTab'
 import { ProcessingTab } from './flows/ProcessingTab'
 
 type Tab = 'processing' | 'agents'
@@ -37,13 +38,16 @@ export default function App() {
           ))}
         </nav>
       </header>
-      {/* Both tabs stay mounted so switching away doesn't lose a half-stepped batch. */}
+      {/* Processing stays mounted so switching tabs doesn't lose a half-stepped batch. Agent runs
+          mounts when shown, because React Flow fits its view to the size it has when it mounts. */}
       <main className={cx('min-h-0 flex-1', tab !== 'processing' && 'hidden')}>
         <ProcessingTab />
       </main>
-      <main className={cx('min-h-0 flex-1', tab !== 'agents' && 'hidden')}>
-        <p className="p-6 text-slate-500">Agent runs</p>
-      </main>
+      {tab === 'agents' && (
+        <main className="min-h-0 flex-1">
+          <AgentRunsTab />
+        </main>
+      )}
     </div>
   )
 }

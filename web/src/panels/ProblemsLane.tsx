@@ -20,7 +20,7 @@ export function ProblemsLane({ problems, allProblems, hasResult, selectedProblem
         <h2 className="text-[13px] font-semibold text-slate-800">Problems</h2>
         <span className="text-xs text-slate-500">{groups.length > 0 ? summarizeGroups(groups) : ''}</span>
       </header>
-      <div className="flex h-[112px] gap-3 overflow-x-auto px-4 py-3">
+      <div className="flex h-[132px] gap-3 overflow-x-auto px-4 py-3">
         {groups.length === 0 && (
           <p className="self-center text-[13px] text-slate-500">
             {hasResult ? 'No problems found by the stages reached so far.' : 'Problems found by each stage collect here, grouped by code.'}
@@ -34,7 +34,7 @@ export function ProblemsLane({ problems, allProblems, hasResult, selectedProblem
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex w-[236px] shrink-0 flex-col rounded-lg bg-slate-50/70 p-2 ring-1 ring-slate-200"
+              className="flex w-[264px] shrink-0 flex-col rounded-lg bg-slate-50/70 p-2 ring-1 ring-slate-200"
             >
               <div className="mb-1.5 flex items-center gap-2 px-1 text-[12px] font-semibold text-slate-700">
                 <span className={cx('size-2 rounded-full', PROBLEM_STYLES[group.code].dot)} />

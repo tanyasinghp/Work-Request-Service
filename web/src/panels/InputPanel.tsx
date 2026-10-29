@@ -38,16 +38,16 @@ export function InputPanel({ input, problems, highlighted }: {
                 }}
                 className={cx(
                   'grid grid-cols-[34px_minmax(0,1fr)_auto] items-start gap-2 px-4 py-2 transition-colors duration-300',
-                  highlighted.includes(index) ? 'bg-indigo-50' : 'bg-white',
+                  highlighted.includes(index) ? 'bg-indigo-50 shadow-[inset_3px_0_0_#6366f1]' : 'bg-white',
                 )}
               >
                 <span className="pt-px font-mono text-[11px] text-slate-400">#{index}</span>
                 {fields ? (
-                  <span className="min-w-0 font-mono text-[12px] leading-5 text-slate-700">
+                  <span className="min-w-0 font-mono text-[12px] leading-5 whitespace-pre text-slate-700">
                     <span className="font-semibold text-slate-900">{displayRaw(fields.requestId)}</span>
                     <span className="text-slate-400"> · </span>{displayRaw(fields.equipmentId)}
                     <span className="text-slate-400"> · </span>{displayRaw(fields.priority)}
-                    <span className="block truncate text-slate-500">{displayRaw(fields.description)}</span>
+                    <span className="block overflow-hidden text-ellipsis whitespace-pre text-slate-500">{displayRaw(fields.description)}</span>
                   </span>
                 ) : (
                   <span className="font-mono text-[12px] text-slate-500 italic">{displayRaw(element)} (not a request object)</span>
