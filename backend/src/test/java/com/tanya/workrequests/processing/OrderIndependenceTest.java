@@ -33,11 +33,18 @@ class OrderIndependenceTest {
     private static final long GENERATOR_SEED = 2026;
     private static final Instant START = Instant.parse("2026-10-20T00:00:00Z");
     private static final Priority[] PRIORITIES = Priority.values();
+    /** A tight Low cap, so the generated batch also produces an over-cap problem. */
+    private static final int LOW_CAP = 1;
 
     private final WorkRequestProcessor processor = new WorkRequestProcessor(
             new WorkRequestValidator(),
             new DuplicateResolver(new DescriptionNormalizer()),
             new WorkRequestSorter());
+
+    private final WorkRequestProcessor cappedProcessor = new WorkRequestProcessor(
+            new WorkRequestValidator(),
+            new DuplicateResolver(new DescriptionNormalizer()),
+            new WorkRequestSorter(LOW_CAP));
 
     @Test
     void producesIdenticalOutputAcross100Shuffles() {
@@ -53,7 +60,8 @@ class OrderIndependenceTest {
     void generatedBatchCoversEveryKindOfProblem() {
         List<Element> batch = generatedBatch();
 
-        ProcessingResult result = processElements(batch);
+        // A Low cap is the only way to reach OVER_LOW_PRIORITY_CAP, so this batch is capped.
+        ProcessingResult result = processElements(batch, cappedProcessor);
 
         assertThat(batch).hasSize(200);
         assertThat(result.problems()).extracting(Problem::code).contains(ProblemCode.values());
@@ -177,6 +185,10 @@ class OrderIndependenceTest {
     }
 
     private ProcessingResult processElements(List<Element> elements) {
+        return processElements(elements, processor);
+    }
+
+    private ProcessingResult processElements(List<Element> elements, WorkRequestProcessor processor) {
         Map<Integer, List<InvalidField>> invalidFields = new HashMap<>();
         for (int index = 0; index < elements.size(); index++) {
             if (!elements.get(index).invalidFields().isEmpty()) {

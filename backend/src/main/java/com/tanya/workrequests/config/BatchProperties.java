@@ -1,6 +1,7 @@
 package com.tanya.workrequests.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /** {@code app.batch.*}: guards that protect the service from oversized input. */
@@ -10,6 +11,9 @@ public record BatchProperties(@DefaultValue("5000") int maxSize,
 
     static final int DEFAULT_MAX_LOW_PRIORITY = 1000;
 
+    // With a second (one-argument) constructor Spring can no longer deduce which constructor to
+    // bind, so the canonical one is marked explicitly.
+    @ConstructorBinding
     public BatchProperties {
         if (maxSize < 1) {
             throw new IllegalArgumentException("app.batch.max-size must be at least 1, was " + maxSize);
