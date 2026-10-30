@@ -102,4 +102,11 @@ Out of scope: Changing sample-batch.json or the pinned SampleBatchTest expectati
 
 ## Manual fixes
 
-- Not reviewed yet.
+- Extend OrderIndependenceTest's generated batch with one request older than 30 days so generatedBatchCoversEveryKindOfProblem covers STALE; this is the gate failure on attempt 2. The agent never saw that failure: attempt 1 was rejected before the gate, so the retry's feedback was the rejection, not the test output.
+- Time bomb: the Spring-wired validator uses the system clock with max-age 30d, while sample-batch.json is dated 2026-10-20. From 2026-11-20 the demo sample and the Spring-context tests that post it (WorkRequestControllerTest, SmokeTest, ApplicationWiringTest) would report every request as STALE. Pin a clock or max-age in those tests and make the sample dates relative to today (or exempt the sample).
+- Web UI: add STALE to the front end's problem codes, labels, stage mapping and colours (the agent may only edit backend/src).
+
+## Review notes
+
+- Attempt 1 was a degenerate model answer: about 9,600 output tokens, then the structured output {"diff": "placeholder", "summary": "placeholder"}. The guardrails rejected it correctly. The output schema now requires a real diff header, so a reply like that uses the stage's one JSON retry instead of an Implement attempt.
+- Design is the same as the second run and sound: app.staleness.max-age (Duration, at least 1 day), staleness off for the no-arg constructor so existing fixtures stay valid, stale requests rejected in validate before deduplication, and 12 new test classes written from the criteria only.

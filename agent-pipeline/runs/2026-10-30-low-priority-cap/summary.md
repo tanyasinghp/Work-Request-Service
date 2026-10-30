@@ -106,4 +106,10 @@ Out of scope: Caps for MEDIUM, HIGH or CRITICAL priorities; Per-sender or per-eq
 
 ## Manual fixes
 
-- Not reviewed yet.
+- Web UI: add OVER_LOW_PRIORITY_CAP to the front end's problem codes, labels and colours, and map it to the prioritize stage in logic/stepping.ts (its problems come from the sorter, so the current validate/deduplicate mapping would never reveal them). The agent may only edit backend/src.
+
+## Review notes
+
+- The retry loop did its job: attempt 1 added a second BatchProperties constructor, which left Spring unable to pick one to bind, so every Spring context failed to start (first failure: BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound, written independently from the criteria). Attempt 2 received that output and fixed it with @ConstructorBinding on the canonical constructor.
+- OrderIndependenceTest: the every-code coverage test now runs through a processor capped at one Low request, the only way OVER_LOW_PRIORITY_CAP can appear. Its assertions are unchanged, so it isn't weaker; the guardrails didn't flag it because no assertion line changed. Worth a look anyway.
+- Design question for the reviewer: the cap lives in WorkRequestSorter (the prioritize stage), because which Low requests survive depends on the sort order. That's defensible, but the sorter now filters as well as sorts; a separate stage would keep one responsibility per class. Over-cap requests are reported as problems, never silently dropped, and the choice is order-independent (earliest requestedAt, then requestId).

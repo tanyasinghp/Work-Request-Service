@@ -100,4 +100,11 @@ Client.listTools() called but server does not advertise tools capability - retur
 
 ## Manual fixes
 
-- Not reviewed yet.
+- Extend OrderIndependenceTest's generated batch with a stale request so generatedBatchCoversEveryKindOfProblem covers STALE (the gate failure; attempt 2 would have received exactly this failure but never ran).
+- Time bomb: the Spring-wired validator uses the system clock with the 30-day default, and sample-batch.json is dated 2026-10-20, so from 2026-11-20 the demo sample and the Spring-context API tests would report every request as STALE. Pin a clock (or max-age) for those tests and make the sample dates relative, or exempt the sample.
+- Web UI: add STALE to the front end's problem codes, labels, stage mapping and colours (the agent may only edit backend/src).
+
+## Review notes
+
+- Stopped at implement-2 because the Claude account behind claude -p hit its session usage limit (HTTP 429, 'resets 11:20pm'); both the call and its one retry failed instantly. Not an agent failure, but the run did not complete, so the story was rerun once the limit reset.
+- Design choices worth keeping: app.staleness.max-age as a Duration with a positive-only check; staleness off for the no-arg constructor so existing fixtures stay valid; stale requests rejected in validate so they never reach deduplication; messages quote the configured threshold rather than the request's age, so they don't change day to day.

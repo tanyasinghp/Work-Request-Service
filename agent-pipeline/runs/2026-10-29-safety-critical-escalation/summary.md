@@ -37,4 +37,9 @@ to Critical because its equipment is safety-critical.
 
 ## Manual fixes
 
-- Not reviewed yet.
+- None needed.
+
+## Review notes
+
+- Partly an infrastructure failure: the Mac went to sleep at 03:14 IST, the minute the run started, and only woke briefly for maintenance until after it ended (pmset log). caffeinate cannot override lid-closed sleep on battery. The first Enrich call gave no answer within the 15-minute wall-clock deadline.
+- The retry did run and is a genuine result: it returned 15 acceptance criteria, over the schema's limit of 12, so Enrich stopped as designed. The criteria were detailed and plausible (app.safety.critical-equipment-ids, a SAFETY_ESCALATION marker, no change when unconfigured) but too many for one story.

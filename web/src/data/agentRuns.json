@@ -1,45 +1,873 @@
 {
   "runs": [
     {
-      "id": "placeholder-0",
-      "title": "PLACEHOLDER — not a real run",
-      "placeholder": true,
+      "id": "2026-10-29-suspicious-timestamp",
+      "title": "Report future timestamps",
       "date": "2026-10-29",
-      "story": "PLACEHOLDER: this run shows the layout only. The agent pipeline overwrites agentRuns.json with real runs. Example story: requests with a requestedAt in the future get a SUSPICIOUS_TIMESTAMP problem.",
+      "story": "As an integrator sending batches from several sites, I want a SUSPICIOUS_TIMESTAMP problem\nfor any request whose requestedAt is in the future, so that clock or time-zone bugs in a\nsending system are caught instead of distorting the queue order.\n\n\"In the future\" is relative to the time the batch is processed, and the check must be\ntestable without depending on the real clock.",
+      "outcome": "passed",
+      "stoppedAt": null,
+      "branch": "agent/suspicious-timestamp",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 714,
+      "costUsd": 2.7283,
       "enrich": {
         "criteria": [
           {
-            "given": "a request whose requestedAt is after the batch's processing time",
-            "when": "the batch is processed",
-            "then": "it is reported as SUSPICIOUS_TIMESTAMP and not accepted"
+            "given": "ProblemCode and Problem",
+            "when": "a new problem is needed for future timestamps",
+            "then": "ProblemCode has a new constant SUSPICIOUS_TIMESTAMP declared last (after CONFLICTING_REQUEST_ID) and Problem gains a static factory Problem.suspiciousTimestamp(int inputIndex, String requestId, Instant requestedAt) producing code SUSPICIOUS_TIMESTAMP, field \"requestedAt\", null relatedRequestId/escalatedFrom/escalatedTo, and message \"<requestId> has requestedAt <instant> in the future\" using Instant.toString(), or \"Request has requestedAt <instant> in the future\" when requestId is null"
+          },
+          {
+            "given": "a WorkRequestValidator built with Clock.fixed(Instant.parse(\"2026-10-20T12:00:00Z\"), ZoneOffset.UTC)",
+            "when": "validate is called on one otherwise-valid request with requestedAt 2026-10-21T08:30:00Z",
+            "then": "exactly one problem is returned, with code SUSPICIOUS_TIMESTAMP, field \"requestedAt\", inputIndex 0 and the request's requestId, and the request is absent from StageResult.requests()"
+          },
+          {
+            "given": "the same clock fixed at 2026-10-20T12:00:00Z",
+            "when": "requests with requestedAt 2026-10-20T12:00:00Z (exactly equal) or 2026-10-20T11:59:59.999Z are validated",
+            "then": "no SUSPICIOUS_TIMESTAMP problem is reported and both are accepted; only an instant strictly after the clock instant is future, with no tolerance window and no configuration property"
+          },
+          {
+            "given": "a request whose requestedAt is null, or whose requestedAt is listed in invalidFieldsByIndex as an unreadable raw value",
+            "when": "it is validated with a fixed clock",
+            "then": "only MISSING_FIELD or INVALID_VALUE for field \"requestedAt\" is reported and no SUSPICIOUS_TIMESTAMP problem, since the check needs a parsed instant"
+          },
+          {
+            "given": "a request WR-1 missing equipmentId and also dated in the future",
+            "when": "it is validated",
+            "then": "both problems are reported for that input index, the existing field-order problems first and SUSPICIOUS_TIMESTAMP last, and the validate trace note is the index-free \"WR-1 rejected: missing equipmentId, future requestedAt\" (label \"Request without id\" when the id is blank), with notes still sorted and out counting only accepted requests"
+          },
+          {
+            "given": "a batch with identical content in a past-dated and a future-dated request, processed by WorkRequestProcessor with a fixed clock",
+            "when": "process(batch) runs and the batch is shuffled repeatedly",
+            "then": "the future-dated request is rejected in validate, never reaches deduplicate (no DUPLICATE problem or escalation for it), the trace still has exactly three entries validate/deduplicate/prioritize, and queue, problems and notes are identical for every ordering with SUSPICIOUS_TIMESTAMP problems ordered by inputIndex inside the validate block"
+          },
+          {
+            "given": "existing callers of new WorkRequestValidator()",
+            "when": "the clock is introduced",
+            "then": "the no-arg constructor still compiles and behaves as if given Clock.systemUTC(), a new WorkRequestValidator(Clock clock) overload exists that throws NullPointerException with message \"clock\" on null, and clock.instant() is read once per validate call so all requests in a batch share one instant"
+          },
+          {
+            "given": "the Spring context",
+            "when": "it starts with no overriding bean",
+            "then": "ProcessingConfig exposes a java.time.Clock bean named clock returning Clock.systemUTC() and builds the workRequestValidator bean with it"
+          },
+          {
+            "given": "the pinned 13-request sample batch (all requestedAt on 2026-10-20) and the generated order-independence batch",
+            "when": "they are processed after 2026-10-20 with the system clock",
+            "then": "the sample batch produces no SUSPICIOUS_TIMESTAMP and keeps its pinned queue, problems and counts 13 → 10 → 6, while the generated batch is extended to include a future-dated request so every ProblemCode value, including SUSPICIOUS_TIMESTAMP, is still covered and BatchObserver reports one counter per code"
           }
         ],
-        "affectedClasses": ["ProblemCode", "WorkRequestValidator"],
-        "outOfScope": ["Clock skew tolerance"]
+        "affectedClasses": [
+          "ProblemCode",
+          "Problem",
+          "WorkRequestValidator",
+          "ProcessingConfig",
+          "OrderIndependenceTest",
+          "BatchObserver"
+        ],
+        "outOfScope": [
+          "Any configurable clock-skew tolerance or app.* property for the future check",
+          "Flagging implausibly old requestedAt values",
+          "Making DuplicateResolver, WorkRequestSorter or WorkRequestProcessor clock-aware",
+          "Changing the pinned sample-batch.json data or its expected output",
+          "Changing the API DTO shape or adding a new HTTP endpoint/response field",
+          "Changing existing ProblemCode constant order or existing problem messages"
+        ]
       },
       "implement": {
         "attempts": [
-          { "attempt": 1, "summary": "Placeholder: first diff", "diffLines": 0 },
-          { "attempt": 2, "summary": "Placeholder: diff after the failing test output", "diffLines": 0 }
+          {
+            "attempt": 1,
+            "summary": "Added `ProblemCode.SUSPICIOUS_TIMESTAMP` (declared last) plus a `Problem.suspiciousTimestamp(inputIndex, requestId, requestedAt)` factory, and made `WorkRequestValidator` clock-aware: a new `WorkRequestValidator(Clock)` overload (null-checked with message \"clock\") alongside the existing no-arg constructor defaulting to `Clock.systemUTC()`, reading `clock.instant()` once per `validate` call and appending a SUSPICIOUS_TIMESTAMP problem (after the field-order problems) for any parsed `requestedAt` strictly after that instant, with the trace note reason \"future requestedAt\". `ProcessingConfig` now exposes a `clock` bean returning `Clock.systemUTC()` and builds `workRequestValidator` with it; the generated order-independence batch gained one far-future request (size 200 → 201) so every ProblemCode stays covered.",
+            "diffLines": 80
+          }
         ]
       },
       "writeTests": {
-        "testNames": ["Placeholder.reportsFutureTimestampAsSuspicious"]
+        "testNames": [
+          "SuspiciousTimestampProblemTest.declaresSuspiciousTimestampLastAfterConflictingRequestId",
+          "SuspiciousTimestampProblemTest.buildsASuspiciousTimestampProblemForTheRequestedAtField",
+          "SuspiciousTimestampProblemTest.keepsTheInputIndexAndRequestIdItWasGiven",
+          "SuspiciousTimestampProblemTest.leavesRelatedRequestIdAndEscalationFieldsNull",
+          "SuspiciousTimestampProblemTest.namesTheRequestAndTheInstantInTheMessage",
+          "SuspiciousTimestampProblemTest.fallsBackToAGenericSubjectWhenTheRequestIdIsNull",
+          "SuspiciousTimestampProblemTest.rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept",
+          "FutureRequestedAtValidationTest.reportsOneSuspiciousTimestampProblemForAFutureDatedRequest",
+          "FutureRequestedAtValidationTest.dropsTheFutureDatedRequestFromTheStageResultRequests",
+          "FutureRequestedAtValidationTest.countsOnlyAcceptedRequestsInTheValidateTrace",
+          "FutureRequestedAtValidationTest.acceptsARequestDatedExactlyAtTheClockInstant",
+          "FutureRequestedAtValidationTest.acceptsARequestDatedOneMillisecondBeforeTheClockInstant",
+          "FutureRequestedAtValidationTest.flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow",
+          "FutureRequestedAtValidationTest.reportsOnlyMissingFieldWhenRequestedAtIsNull",
+          "FutureRequestedAtValidationTest.reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed",
+          "FutureRequestedAtValidationTest.reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem",
+          "FutureRequestedAtValidationTest.reportsBothProblemsForTheSameInputIndex",
+          "FutureRequestedAtValidationTest.writesAnIndexFreeNoteListingMissingAndFutureReasons",
+          "FutureRequestedAtValidationTest.writesAFutureRequestedAtNoteForAnOtherwiseValidRequest",
+          "FutureRequestedAtValidationTest.labelsABlankIdRequestAsRequestWithoutIdInTheNote",
+          "FutureRequestedAtValidationTest.keepsNotesSortedWhenAFutureRequestIsRejected",
+          "FutureRequestedAtValidationTest.noArgConstructorFlagsARequestDatedAfterTheRealNow",
+          "FutureRequestedAtValidationTest.noArgConstructorAcceptsARequestDatedBeforeTheRealNow",
+          "FutureRequestedAtValidationTest.acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast",
+          "FutureRequestedAtValidationTest.rejectsANullClock",
+          "FutureRequestedAtValidationTest.readsTheClockOncePerValidateCall",
+          "FutureRequestedAtValidationTest.comparesEveryRequestInABatchAgainstTheSameInstant",
+          "FutureRequestedAtPipelineTest.reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests",
+          "FutureRequestedAtPipelineTest.reportsNoDuplicateProblemForTheFutureTwin",
+          "FutureRequestedAtPipelineTest.neverEscalatesAPriorityFromTheFutureTwin",
+          "FutureRequestedAtPipelineTest.keepsTheThreeStageTraceWhenAFutureRequestIsRejected",
+          "FutureRequestedAtPipelineTest.passesOnlyTheAcceptedRequestsIntoDeduplicate",
+          "FutureRequestedAtPipelineTest.producesTheSameQueueForEveryInputOrder",
+          "FutureRequestedAtPipelineTest.producesTheSameProblemsForEveryInputOrder",
+          "FutureRequestedAtPipelineTest.producesTheSameTraceNotesForEveryInputOrder",
+          "FutureRequestedAtPipelineTest.ordersSuspiciousTimestampProblemsByInputIndex",
+          "FutureRequestedAtPipelineTest.keepsEveryProblemCodeIncludingSuspiciousTimestampReachable",
+          "ClockBeanWiringTest.exposesAClockBeanNamedClock",
+          "ClockBeanWiringTest.theClockBeanIsTheSystemUtcClock",
+          "ClockBeanWiringTest.buildsTheValidatorWithTheContextClockSoFutureRequestsAreFlagged",
+          "ClockBeanWiringTest.buildsTheValidatorWithTheContextClockSoPastRequestsAreAccepted",
+          "BatchObserverSuspiciousTimestampTest.registersOneRejectionCounterPerProblemCode",
+          "BatchObserverSuspiciousTimestampTest.countsAFutureDatedRequestUnderTheSuspiciousTimestampCode"
+        ]
+      },
+      "gate": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "passed": true
+          }
+        ]
+      },
+      "summary": {
+        "text": "## What changed\n\nAdds a `SUSPICIOUS_TIMESTAMP` problem for requests whose `requestedAt` is strictly after the instant the batch is processed, and makes \"now\" injectable so the check is testable without the real clock.\n\nPer the story and criteria, the change set is:\n\n- `ProblemCode`: new constant `SUSPICIOUS_TIMESTAMP`, declared last (after `CONFLICTING_REQUEST_ID`), so existing constant order is untouched.\n- `Problem`: new static factory `Problem.suspiciousTimestamp(int inputIndex, String requestId, Instant requestedAt)` producing field `\"requestedAt\"`, null `relatedRequestId`/`escalatedFrom`/`escalatedTo`, and message `\"<requestId> has requestedAt <instant> in the future\"` (or `\"Request has requestedAt <instant> in the future\"` when the id is null).\n- `WorkRequestValidator`: now clock-aware. A new `WorkRequestValidator(Clock)` constructor sits alongside the existing no-arg one (which behaves as `Clock.systemUTC()`); `clock.instant()` is read once per `validate` call so all requests in a batch are compared against the same instant. Future-dated requests are rejected (dropped from `StageResult.requests()`) with the new problem appended after the existing field-order problems, and the trace note gains a `future requestedAt` reason.\n- `ProcessingConfig`: exposes a `java.time.Clock` bean named `clock` returning `Clock.systemUTC()` and builds `workRequestValidator` with it.\n- `OrderIndependenceTest` / `BatchObserver`-side coverage: the generated batch is extended with a future-dated request so every `ProblemCode` value, including the new one, stays reachable.\n\n43 new tests across five test classes.\n\n**Caveat for the reviewer:** the diff available to me was truncated — only the `agent-pipeline/runs/2026-10-29-suspicious-timestamp/*` prompt/response artifacts were visible in full. The description of the production changes above is reconstructed from the acceptance criteria and test names, not read off the diff. Please verify the `backend/` hunks directly.\n\n## Criteria coverage\n\n| Criterion | Checked by |\n| --- | --- |\n| `ProblemCode.SUSPICIOUS_TIMESTAMP` declared last; `Problem.suspiciousTimestamp(...)` shape and message | `SuspiciousTimestampProblemTest.declaresSuspiciousTimestampLastAfterConflictingRequestId`, `buildsASuspiciousTimestampProblemForTheRequestedAtField`, `keepsTheInputIndexAndRequestIdItWasGiven`, `leavesRelatedRequestIdAndEscalationFieldsNull`, `namesTheRequestAndTheInstantInTheMessage`, `fallsBackToAGenericSubjectWhenTheRequestIdIsNull`, `rendersTheInstantWithInstantToStringSoSubSecondPrecisionIsKept` |\n| Fixed clock 2026-10-20T12:00:00Z, request at 2026-10-21T08:30:00Z → exactly one problem, right code/field/index/id, absent from `requests()` | `FutureRequestedAtValidationTest.reportsOneSuspiciousTimestampProblemForAFutureDatedRequest`, `dropsTheFutureDatedRequestFromTheStageResultRequests` |\n| Equal instant and 1 ms earlier accepted; strictly-after only, no tolerance window | `FutureRequestedAtValidationTest.acceptsARequestDatedExactlyAtTheClockInstant`, `acceptsARequestDatedOneMillisecondBeforeTheClockInstant`, `flagsARequestDatedOneMillisecondAfterTheClockInstantSoThereIsNoToleranceWindow` |\n| \"no configuration property\" for the check | Not covered by an assertion; only observable as the absence of an `app.*` key in the diff — please confirm no property was added |\n| Null or unparseable `requestedAt` → only `MISSING_FIELD`/`INVALID_VALUE`, no `SUSPICIOUS_TIMESTAMP` | `FutureRequestedAtValidationTest.reportsOnlyMissingFieldWhenRequestedAtIsNull`, `reportsOnlyInvalidValueWhenRequestedAtCouldNotBeParsed` |\n| Missing `equipmentId` + future date → both problems, field problems first, index-free note `\"WR-1 rejected: missing equipmentId, future requestedAt\"`, blank-id label, notes sorted, `out` counts only accepted | `FutureRequestedAtValidationTest.reportsBothProblemsForTheSameInputIndex`, `reportsExistingFieldProblemsBeforeTheSuspiciousTimestampProblem`, `writesAnIndexFreeNoteListingMissingAndFutureReasons`, `writesAFutureRequestedAtNoteForAnOtherwiseValidRequest`, `labelsABlankIdRequestAsRequestWithoutIdInTheNote`, `keepsNotesSortedWhenAFutureRequestIsRejected`, `countsOnlyAcceptedRequestsInTheValidateTrace` |\n| Future twin never reaches deduplicate; three-stage trace; order-independent queue/problems/notes; problems ordered by `inputIndex` | `FutureRequestedAtPipelineTest.reportsOnlySuspiciousTimestampProblemsForTheFutureDatedRequests`, `reportsNoDuplicateProblemForTheFutureTwin`, `neverEscalatesAPriorityFromTheFutureTwin`, `keepsTheThreeStageTraceWhenAFutureRequestIsRejected`, `passesOnlyTheAcceptedRequestsIntoDeduplicate`, `producesTheSameQueueForEveryInputOrder`, `producesTheSameProblemsForEveryInputOrder`, `producesTheSameTraceNotesForEveryInputOrder`, `ordersSuspiciousTimestampProblemsByInputIndex` |\n| No-arg constructor still compiles and acts as `systemUTC()`; `WorkRequestValidator(Clock)` throws NPE `\"clock\"`; clock read once per call | `FutureRequestedAtValidationTest.noArgConstructorFlagsARequestDatedAfterTheRealNow`, `noArgConstructorAcceptsARequestDatedBeforeTheRealNow`, `rejectsANullClock`, `readsTheClockOncePerValidateCall`, `comparesEveryRequestInABatchAgainstTheSameInstant` (plus the existing suites that call `new WorkRequestValidator()` — they compile and pass) |\n| Spring context exposes a `Clock` bean named `clock` returning `Clock.systemUTC()`, validator built with it | `ClockBeanWiringTest.exposesAClockBeanNamedClock`, `theClockBeanIsTheSystemUtcClock`, `buildsTheValidatorWithTheContextClockSoFutureRequestsAreFlagged`, `buildsTheValidatorWithTheContextClockSoPastRequestsAreAccepted` |\n| Sample batch produces no `SUSPICIOUS_TIMESTAMP` under the system clock | `FutureRequestedAtValidationTest.acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast` |\n| Sample batch keeps its pinned queue, problems and counts 13 → 10 → 6 | Not covered by a new test; relies on the pre-existing `SampleBatchTest` still passing in the gate run |\n| Generated batch extended so every `ProblemCode`, including the new one, is covered; `BatchObserver` reports one counter per code | `FutureRequestedAtPipelineTest.keepsEveryProblemCodeIncludingSuspiciousTimestampReachable`, `BatchObserverSuspiciousTimestampTest.registersOneRejectionCounterPerProblemCode`, `countsAFutureDatedRequestUnderTheSuspiciousTimestampCode` (whether `OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem` itself was extended is in the truncated part of the diff) |\n\n## Test results\n\n- Attempt 1: passed. No retries. The gate output summary did not include per-test counts, so the only evidence here is \"all gates green on the first attempt\" — the pre-existing suites (`SampleBatchTest`, `WorkRequestValidatorTest`, `OrderIndependenceTest`, `BatchObserverTest`, `EdgeCaseTest`, API tests) are covered by that run, not by any new assertion.\n\n## Worth a closer look\n\n- **Truncated diff.** I could only read the pipeline artifact files; the `backend/` source hunks were cut off. Everything above about the production code is inferred. Review the actual `ProblemCode`, `Problem`, `WorkRequestValidator` and `ProcessingConfig` changes before merging.\n- **Three tests depend on the real clock.** `noArgConstructorFlagsARequestDatedAfterTheRealNow`, `noArgConstructorAcceptsARequestDatedBeforeTheRealNow` and `acceptsSampleBatchDatesUnderTheSystemClockBecauseTheyAreInThePast` use `Clock.systemUTC()` by construction. The sample-batch one only holds while the build machine's clock is after 2026-10-20 (true today); the no-arg ones should be using a generous offset from `Instant.now()` rather than a literal date — worth checking they are not flaky near the boundary.\n- **The future-dated request in the generated/order-independence batch will age.** If its `requestedAt` is a hardcoded instant rather than `now + delta`, `SUSPICIOUS_TIMESTAMP` coverage silently disappears once that date passes and the \"every ProblemCode is covered\" assertion starts failing (or, worse, keeps passing for another reason). Please verify it is relative to the clock.\n- **Rejection, not annotation.** A future-dated request is dropped from the accepted queue entirely, so a single bad sender clock removes work from the queue rather than just flagging it. That is what the criteria ask for, but it is a behaviour change visible to API clients (lower `out` counts, new problem code in responses) and is worth a conscious sign-off.\n- **Note wording.** `\"WR-1 rejected: missing equipmentId, future requestedAt\"` mixes the existing `missing <field>` / `invalid <field>` reason vocabulary with a new `future requestedAt` phrasing that has no field prefix. Check the `rejectionNote` implementation does not alter the text of any existing reason, since trace notes are asserted verbatim elsewhere.\n- **NPE message.** `rejectsANullClock` is named for the behaviour but I cannot confirm from here that it asserts the message is exactly `\"clock\"` as the criterion requires.\n- **`Clock` bean name.** A bean of type `java.time.Clock` named `clock` is now in the context; confirm it does not collide with or get overridden by anything in the test slices, and that `ApplicationWiringTest` expectations were updated if it enumerates beans.\n",
+        "manualFixes": [
+          "Web UI: add SUSPICIOUS_TIMESTAMP to web/src/types.ts, PROBLEM_CODES/PROBLEM_LABELS (logic/problems.ts), STAGE_OF_CODE (logic/stepping.ts) and PROBLEM_STYLES (components/styles.ts). Without it the Problems lane silently drops the new problems and the input panel throws on the missing colour. The agent could not do this: it may only edit backend/src."
+        ],
+        "reviewed": true,
+        "reviewNotes": [
+          "Backend change reviewed and fine as is: Clock bean plus a WorkRequestValidator(Clock) overload, the no-arg constructor kept, now read once per batch, strictly-after comparison, unreadable dates stay INVALID_VALUE.",
+          "The OrderIndependenceTest edit flagged by the guardrails is legitimate: one future-dated request added to the generator, so the size assertion moved from 200 to 201.",
+          "Two tests use the real clock (now ± 1 hour) only to prove the no-arg constructor uses the system clock; acceptable.",
+          "Commit 644ffc6 ('add agentic pipeline') was made outside the pipeline during this run while the agent branch was checked out; it contains only this run's first five log files. The recorded final diff size (2409 lines) includes those 1688 log lines; the agent's own change is 721 lines in backend/src. The pipeline now stops if its branch changes underneath it."
+        ]
+      }
+    },
+    {
+      "id": "2026-10-29-stale-requests",
+      "title": "Flag stale requests",
+      "date": "2026-10-29",
+      "story": "As a maintenance supervisor, I want requests older than 30 days to be flagged as stale in\nthe problems list, so that old reports that may no longer be relevant get reviewed instead\nof silently joining the queue.\n\n\"Older than 30 days\" is measured against the time the batch is processed. A stale request\nis reported as a problem; whether it is also kept out of the queue is a decision the\nacceptance criteria must state explicitly.",
+      "outcome": "stopped",
+      "stoppedAt": "write-tests",
+      "branch": "agent/stale-requests",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 2453,
+      "costUsd": 0.5569,
+      "enrich": {
+        "criteria": [
+          {
+            "given": "the ProblemCode enum",
+            "when": "the story is implemented",
+            "then": "a new constant STALE exists, declared last (after CONFLICTING_REQUEST_ID), so ProblemCode.values() is NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE"
+          },
+          {
+            "given": "the Problem record",
+            "when": "Problem.stale(7, \"WR-100\", 45L) is called (signature: static Problem stale(int inputIndex, String requestId, long ageInDays))",
+            "then": "it returns a Problem with inputIndex 7, requestId \"WR-100\", code STALE, field \"requestedAt\", relatedRequestId null, escalatedFrom null, escalatedTo null, and message exactly \"WR-100 is stale: requested 45 days before processing\" (no input index in the message)"
+          },
+          {
+            "given": "a WorkRequestValidator built with new WorkRequestValidator(Clock.fixed(Instant.parse(\"2026-10-29T00:00:00Z\"), ZoneOffset.UTC), 30) and a batch of one otherwise-valid request whose requestedAt is \"2026-09-01T00:00:00Z\" (58 days earlier)",
+            "when": "validate(batch) is called",
+            "then": "the StageResult requests list is empty, problems contains exactly one Problem equal to Problem.stale(0, thatRequestId, 58L), and the trace is new StageTrace(\"validate\", 1, 0, List.of(\"<requestId> rejected: stale (58 days old)\"))"
+          },
+          {
+            "given": "a validator with a fixed clock at \"2026-10-29T00:00:00Z\" and maxAgeDays 30",
+            "when": "it validates otherwise-valid requests whose requestedAt is exactly 30 days earlier (\"2026-09-29T00:00:00Z\"), 30 days minus one second earlier, and 30 days plus one second earlier",
+            "then": "only the 30-days-plus-one-second request is flagged STALE (staleness is strictly greater than maxAgeDays, measured as Duration.between(requestedAt, clock.instant()).compareTo(Duration.ofDays(maxAgeDays)) > 0); the other two are kept in the requests list with no problems"
+          },
+          {
+            "given": "a validator with a fixed clock and maxAgeDays 30",
+            "when": "it validates an otherwise-valid request whose requestedAt is after the clock instant (future-dated)",
+            "then": "the request is kept and no STALE problem is reported (negative age is never stale)"
+          },
+          {
+            "given": "a validator with a fixed clock and maxAgeDays 30",
+            "when": "it validates a request that is 60 days old but also has a null equipmentId, and separately a null request, and separately a request with requestedAt reported as an unreadable InvalidField",
+            "then": "only the existing MISSING_FIELD / NULL_REQUEST / INVALID_VALUE problems are reported and no STALE problem is added; the staleness check runs only on requests that have no other validation problem, so it never dereferences a null requestedAt"
+          },
+          {
+            "given": "existing callers that construct the validator with the no-argument constructor new WorkRequestValidator() (and processors built with new WorkRequestProcessor(validator, resolver, sorter))",
+            "when": "any batch is validated, including requests years old",
+            "then": "no STALE problem is produced and no request is dropped for age: the no-arg constructor leaves the staleness check disabled, and the clock/threshold constructor WorkRequestValidator(Clock clock, int maxAgeDays) is the only way to enable it; the clock is rejected with NullPointerException when null and maxAgeDays < 1 is rejected with IllegalArgumentException"
+          },
+          {
+            "given": "a WorkRequestProcessor whose validator has a fixed clock at \"2026-10-29T00:00:00Z\" and maxAgeDays 30, and a batch containing one stale request (90 days old) that is otherwise valid and is a content duplicate of a fresh request, plus two fresh non-duplicate requests",
+            "when": "process(batch) is called",
+            "then": "the queue contains only the fresh requests (the stale one is excluded), the STALE problem appears among the validate-stage problems ordered by input index before any deduplicate-stage problem, the stale request produces no DUPLICATE problem and causes no priority escalation of the kept request, and the trace still has exactly three entries validate/deduplicate/prioritize with the validate out count excluding the stale request"
+          },
+          {
+            "given": "a batch containing stale and fresh requests and a processor with a fixed clock",
+            "when": "the same batch is shuffled and processed repeatedly",
+            "then": "the queue, the problem list and the trace notes are identical every time (staleness depends only on requestedAt and the clock, and the stale note is sorted into the validate notes with no input index in it)"
+          },
+          {
+            "given": "the Spring context with default configuration",
+            "when": "it starts",
+            "then": "a Clock bean returning Clock.systemUTC() is defined in ProcessingConfig, a StalenessProperties record @ConfigurationProperties(\"app.staleness\") with component maxAgeDays and @DefaultValue(\"30\") binds app.staleness.max-age-days, the workRequestValidator bean is built from that Clock and StalenessProperties.maxAgeDays, and application.yml contains app.staleness.max-age-days: 30"
+          },
+          {
+            "given": "the property app.staleness.max-age-days bound to 7",
+            "when": "the context starts and a request 10 days old is processed through the wired processor",
+            "then": "the request is reported STALE and excluded, showing the threshold is configurable; binding a value below 1 fails with IllegalArgumentException whose message is \"app.staleness.max-age-days must be at least 1, was <value>\""
+          },
+          {
+            "given": "the BatchObserver metrics wiring",
+            "when": "a processing result containing two STALE problems is observed",
+            "then": "a counter for ProblemCode.STALE is registered using the same naming scheme as the existing per-code counters and is incremented by 2, so there is still exactly one counter per ProblemCode value"
+          }
+        ],
+        "affectedClasses": [
+          "ProblemCode",
+          "Problem",
+          "WorkRequestValidator",
+          "StalenessProperties",
+          "ProcessingConfig",
+          "BatchObserver"
+        ],
+        "outOfScope": [
+          "Adding a fourth pipeline stage or a fourth trace entry for staleness",
+          "Changing the timestamps in sample-batch.json or the sample batch's pinned expectations",
+          "An API parameter or request header that overrides the staleness threshold per call",
+          "A review/acknowledge workflow, un-staling, or persistence of stale requests",
+          "Rejecting or warning about future-dated requestedAt values",
+          "Per-priority or per-equipment staleness thresholds",
+          "Frontend display of the new problem code"
+        ]
+      },
+      "implement": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "summary": "Added a `STALE` problem code (declared last) with a `Problem.stale(inputIndex, requestId, ageInDays)` factory, and taught `WorkRequestValidator` an optional clock/threshold constructor that rejects requests whose age strictly exceeds `maxAgeDays`, keeping the no-arg constructor behaviour unchanged and running the check only on otherwise-valid requests. Wired it through a new `Clock` bean and a `StalenessProperties` record (`app.staleness`, `@DefaultValue(\"30\")`) in `ProcessingConfig`; `BatchObserver` needed no change because it already registers one counter per `ProblemCode` value.",
+            "diffLines": 101
+          }
+        ]
+      },
+      "writeTests": {
+        "testNames": []
+      },
+      "gate": {
+        "attempts": []
+      },
+      "summary": {
+        "text": "No PR description: the run stopped at write-tests. model call failed: claude -p exited 143:",
+        "manualFixes": [],
+        "reviewed": true,
+        "reviewNotes": [
+          "Infrastructure failure, not an agent failure: the laptop lid was closed at 21:56, three minutes into the Write-tests call, and the Mac slept until 22:28 (pmset log). The API stream died during sleep and the CLI call never returned; the pipeline's 15-minute timeout used a monotonic clock that stops during sleep, so it never fired.",
+          "Stopped by hand after about 37 minutes by killing the hung claude -p process (exit 143); the pipeline then recorded the failure and returned to main cleanly.",
+          "Fixed in the pipeline afterwards: the CLI deadline is now wall-clock time and a failed model call gets the same single retry as invalid JSON.",
+          "Enrich and Implement attempt 1 had completed (101-line diff, applied and committed). The story was rerun from scratch; that rerun replaced agent/stale-requests, and this attempt's diff is kept here as implement-1.diff."
+        ]
+      }
+    },
+    {
+      "id": "2026-10-29-stale-requests-2",
+      "title": "Flag stale requests",
+      "date": "2026-10-29",
+      "story": "As a maintenance supervisor, I want requests older than 30 days to be flagged as stale in\nthe problems list, so that old reports that may no longer be relevant get reviewed instead\nof silently joining the queue.\n\n\"Older than 30 days\" is measured against the time the batch is processed. A stale request\nis reported as a problem; whether it is also kept out of the queue is a decision the\nacceptance criteria must state explicitly.",
+      "outcome": "stopped",
+      "stoppedAt": "implement-2",
+      "branch": "agent/stale-requests",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 551,
+      "costUsd": 1.6824,
+      "enrich": {
+        "criteria": [
+          {
+            "given": "the ProblemCode enum",
+            "when": "the new code is added",
+            "then": "ProblemCode contains a constant named STALE in addition to the existing NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID (order of declaration is irrelevant); because BatchObserver derives one metrics counter per ProblemCode value, no change to BatchObserver is required for a counter named after STALE to appear"
+          },
+          {
+            "given": "the Problem factories",
+            "when": "Problem.stale(int inputIndex, String requestId, long maxAgeDays) is called, e.g. Problem.stale(3, \"R-7\", 30)",
+            "then": "it returns a Problem with inputIndex 3, requestId \"R-7\", code STALE, null field, null relatedRequestId, null escalatedFrom/escalatedTo, and message exactly \"R-7 is older than 30 days\" (pattern: requestId + \" is older than \" + maxAgeDays + \" days\"); the message never mentions the input index"
+          },
+          {
+            "given": "a WorkRequestValidator built with the existing no-argument constructor new WorkRequestValidator()",
+            "when": "validate is called with requests whose requestedAt is arbitrarily far in the past",
+            "then": "no STALE problem is ever produced and the stage result is exactly as before this story (staleness checking is off unless a Clock is supplied), so existing direct-construction tests such as SampleBatchTest keep passing regardless of the real date"
+          },
+          {
+            "given": "a validator built with the new overload new WorkRequestValidator(Clock clock, Duration maxAge), clock = Clock.fixed(Instant.parse(\"2026-10-29T00:00:00Z\"), ZoneOffset.UTC) and maxAge = Duration.ofDays(30)",
+            "when": "validate is called with an otherwise fully valid request \"R-1\" whose requestedAt is 2026-09-01T00:00:00Z (58 days before now)",
+            "then": "the returned StageResult problems contain exactly one problem, Problem.stale(inputIndex, \"R-1\", 30), and the request is NOT in StageResult.requests(), so it never reaches deduplication, prioritization, or the accepted queue"
+          },
+          {
+            "given": "the same clock-backed validator (now = 2026-10-29T00:00:00Z, maxAge = 30 days)",
+            "when": "validate is called with valid requests whose requestedAt is exactly 2026-09-29T00:00:00Z (age exactly 30 days), 2026-09-28T23:59:59Z (age 30 days + 1 second), and 2026-11-05T00:00:00Z (dated in the future)",
+            "then": "only the 30-days-plus-1-second request is reported STALE and excluded; the exactly-30-days request and the future-dated request are accepted with no problem (the rule is Duration.between(requestedAt, clock.instant()).compareTo(maxAge) > 0)"
+          },
+          {
+            "given": "the clock-backed validator and a request that is both stale and already invalid (for example requestedAt null, or missing equipmentId and dated 100 days ago)",
+            "when": "validate is called",
+            "then": "only the existing MISSING_FIELD/INVALID_VALUE/NULL_REQUEST problems are reported for that request and no STALE problem is added; staleness is evaluated only for requests that pass all field checks (so a null requestedAt can never trigger a STALE problem)"
+          },
+          {
+            "given": "the clock-backed validator and a batch of 4 valid requests of which 2 are older than maxAge",
+            "when": "validate is called",
+            "then": "the single validate StageTrace reports stage \"validate\", in = 4, out = 2 (stale requests are counted out), and its notes include one entry per stale request of the exact form requestId + \" rejected: stale\" (e.g. \"R-1 rejected: stale\"); notes remain sorted naturally and contain no input indices, and the result still has exactly the three stages validate, deduplicate, prioritize"
+          },
+          {
+            "given": "a WorkRequestProcessor built over a clock-backed validator, and a batch containing a stale request that is a content duplicate of a fresh kept request plus other requests with validation and duplicate problems",
+            "when": "process is called, and again with the same batch shuffled",
+            "then": "the stale request produces only the STALE problem (no DUPLICATE problem, because deduplication never sees it), ProcessingResult.problems() lists all validate-stage problems (including STALE) before deduplicate-stage problems and, within the validate stage, in ascending inputIndex order, and the accepted queue, problems and trace are identical for every input order"
+          },
+          {
+            "given": "configuration binding",
+            "when": "the context starts with no app.staleness.* properties set",
+            "then": "a @ConfigurationProperties(\"app.staleness\") record StalenessProperties(@DefaultValue(\"30d\") Duration maxAge) binds maxAge to Duration.ofDays(30); setting app.staleness.max-age=7d binds Duration.ofDays(7); a non-positive value (0 or negative, e.g. app.staleness.max-age=0s) fails with an IllegalArgumentException whose message is \"app.staleness.max-age must be positive\""
+          },
+          {
+            "given": "the Spring wiring",
+            "when": "the application context is started",
+            "then": "ProcessingConfig exposes a java.time.Clock bean returning Clock.systemUTC() and builds the WorkRequestValidator bean as new WorkRequestValidator(clock, stalenessProperties.maxAge()), so the deployed service flags staleness while the no-arg constructor stays available for tests; the existing constructors new WorkRequestValidator(), new DuplicateResolver(new DescriptionNormalizer()), new WorkRequestSorter() and new WorkRequestProcessor(validator, resolver, sorter) still compile and behave unchanged"
+          },
+          {
+            "given": "the clock-backed validator with maxAge = Duration.ofDays(7)",
+            "when": "validate is called with a valid request dated 10 days before the fixed now",
+            "then": "the problem message is exactly requestId + \" is older than 7 days\", i.e. the day count in the message comes from the configured maxAge.toDays() and not from the request's actual age"
+          }
+        ],
+        "affectedClasses": [
+          "ProblemCode",
+          "Problem",
+          "WorkRequestValidator",
+          "StalenessProperties",
+          "ProcessingConfig"
+        ],
+        "outOfScope": [
+          "Adding a fourth pipeline stage or a fourth StageTrace entry; staleness is reported inside the existing validate stage",
+          "Adding fields to Problem, ProblemDto or BatchResponse (such as the request's actual age in days)",
+          "An API flag or query parameter to include stale requests in the queue anyway",
+          "Per-priority or per-equipment staleness thresholds, or business-day/time-zone aware ageing",
+          "Auto-closing, re-dating or archiving stale requests, and any persistence of review decisions",
+          "Changes to DuplicateResolver, WorkRequestSorter or DescriptionNormalizer behaviour",
+          "Updating the sample-batch.json timestamps or any frontend/UI work"
+        ]
+      },
+      "implement": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "summary": "Added a STALE problem code with a `Problem.stale(inputIndex, requestId, maxAgeDays)` factory whose message quotes the configured threshold, and gave WorkRequestValidator an optional `(Clock, Duration)` constructor that rejects requests strictly older than maxAge inside the existing validate stage (counted out of the trace, noted as \"<id> rejected: stale\", never passed to deduplication); the no-arg constructor leaves staleness checking off. Added `StalenessProperties` bound from `app.staleness` with a `30d` default and a positivity check, and wired a UTC `Clock` bean plus the clock-backed validator in ProcessingConfig.",
+            "diffLines": 88
+          },
+          {
+            "attempt": 2,
+            "summary": "model call failed: claude -p exited 1: {\"is_error\":true,\"duration_api_ms\":0,\"num_turns\":1,\"stop_reason\":\"stop_sequence\",\"session_id\":\"d08f3c37-96ea-41f4-bfff-31dfa5c79f4b\",\"total_cost_usd\":0,\"usage\":{\"output_tokens_details\":{\"thinking_tokens\":0},\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"api_error\",\"fast_mode_state\":\"off\",\"subtype\":\"success\",\"api_error_status\":429,\"result\":\"You've hit your session limit · resets 11:20pm (Asia/Calcutta)\",\"type\":\"result\",\"duration_ms\":622,\"uuid\":\"f593cab1-d129-4d73-854e-f8b5b2d377c4\"}\nClient.listTools() called but server does not advertise tools capability - returning empty list\n",
+            "diffLines": 0
+          }
+        ]
+      },
+      "writeTests": {
+        "testNames": [
+          "StalenessProblemTest.problemCodeContainsStaleAlongsideTheExistingCodes",
+          "StalenessProblemTest.staleCarriesTheInputIndexItWasGiven",
+          "StalenessProblemTest.staleCarriesTheRequestIdItWasGiven",
+          "StalenessProblemTest.staleUsesTheStaleProblemCode",
+          "StalenessProblemTest.staleMessageNamesTheRequestIdAndTheMaxAgeInDays",
+          "StalenessProblemTest.staleMessageUsesTheMaxAgeDayCountItWasGiven",
+          "StalenessProblemTest.staleLeavesTheFieldUnset",
+          "StalenessProblemTest.staleLeavesTheRelatedRequestIdUnset",
+          "StalenessProblemTest.staleLeavesBothEscalationFieldsUnset",
+          "StalenessValidationTest.validatorBuiltWithoutAClockNeverReportsStaleProblems",
+          "StalenessValidationTest.validatorBuiltWithoutAClockKeepsAncientRequests",
+          "StalenessValidationTest.validatorBuiltWithoutAClockTracesAncientRequestsAsAccepted",
+          "StalenessValidationTest.reportsExactlyOneStaleProblemForARequestOlderThanMaxAge",
+          "StalenessValidationTest.keepsAStaleRequestOutOfTheRequestsThatReachTheNextStage",
+          "StalenessValidationTest.acceptsARequestWhoseAgeIsExactlyMaxAge",
+          "StalenessValidationTest.reportsStaleForARequestOneSecondOlderThanMaxAge",
+          "StalenessValidationTest.acceptsAFutureDatedRequest",
+          "StalenessValidationTest.doesNotReportStaleForARequestWithoutARequestedAt",
+          "StalenessValidationTest.doesNotAddStaleToARequestThatAlreadyFailsAFieldCheck",
+          "StalenessValidationTest.doesNotAddStaleToANullRequest",
+          "StalenessValidationTest.tracesStaleRequestsAsRejectedWithinTheValidateStage",
+          "StalenessValidationTest.keepsOnlyTheFreshRequestsOfAPartlyStaleBatch",
+          "StalenessValidationTest.reportsStaleProblemsInAscendingInputIndexOrder",
+          "StalenessValidationTest.takesTheDayCountInTheMessageFromTheConfiguredMaxAge",
+          "StaleRequestProcessingTest.reportsOnlyStaleForAStaleDuplicateBecauseDeduplicationNeverSeesIt",
+          "StaleRequestProcessingTest.keepsTheFreshOriginalRatherThanTheEarlierStaleCopy",
+          "StaleRequestProcessingTest.listsValidateStageProblemsBeforeDeduplicateStageProblems",
+          "StaleRequestProcessingTest.tracesExactlyTheThreeExistingStages",
+          "StaleRequestProcessingTest.countsStaleRequestsAsRejectedByTheValidateStage",
+          "StaleRequestProcessingTest.notesTheStaleRejectionByRequestIdInTheValidateStage",
+          "StaleRequestProcessingTest.producesTheSameAcceptedQueueForEveryInputOrder",
+          "StaleRequestProcessingTest.producesTheSameTraceForEveryInputOrder",
+          "StaleRequestProcessingTest.producesTheSameProblemsForEveryInputOrder",
+          "StaleRequestProcessingTest.keepsTheDeduplicateStageProblemLastForEveryInputOrder",
+          "StaleRequestProcessingTest.ordersValidateStageProblemsByInputIndexForEveryInputOrder",
+          "StalenessPropertiesTest.defaultsMaxAgeToThirtyDaysWhenNoPropertyIsSet",
+          "StalenessPropertiesTest.bindsMaxAgeFromAppStalenessMaxAge",
+          "StalenessPropertiesTest.rejectsAZeroMaxAge",
+          "StalenessPropertiesTest.rejectsANegativeMaxAge",
+          "StalenessWiringTest.exposesASystemUtcClockBean",
+          "StalenessWiringTest.buildsTheValidatorBeanWithTheConfiguredMaxAge",
+          "StalenessWiringTest.keepsStaleRequestsOutOfTheQueueOfTheWiredProcessor",
+          "StalenessWiringTest.stillOffersAStalenessFreeValidatorThroughTheNoArgumentConstructor",
+          "StalenessWiringTest.stillBuildsAWorkingPipelineFromTheExistingConstructors"
+        ]
       },
       "gate": {
         "attempts": [
           {
             "attempt": 1,
             "passed": false,
-            "failingTest": "Placeholder.existingTestBrokenByAttempt1",
-            "output": "Placeholder: the failing test output sent back to Implement would appear here."
-          },
-          { "attempt": 2, "passed": true }
+            "failingTest": "OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem",
+            "output": "[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.078 s <<< FAILURE! -- in com.tanya.workrequests.processing.OrderIndependenceTest\n[ERROR] com.tanya.workrequests.processing.OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem -- Time elapsed: 0.008 s <<< FAILURE!\njava.lang.AssertionError: \n\nExpecting ArrayList:\n  [MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    INVALID_VALUE,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    INVALID_VALUE,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID]\nto contain:\n  [NULL_REQUEST,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    DUPLICATE,\n    CONFLICTING_REQUEST_ID,\n    STALE]\nbut could not find the following element(s):\n  [STALE]\n\n\tat com.tanya.workrequests.processing.OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem(OrderIndependenceTest.java:59)\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:580)\n\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1596)\n\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1596)\n\n2026-10-29T22:49:59.631+05:30  INFO 5114 --- [work-request-service] [           main] t.c.s.AnnotationConfigContextLoaderUtils : Could not detect default configuration classes for test class [com.tanya.workrequests.api.UnexpectedErrorTest]"
+          }
         ]
       },
       "summary": {
-        "text": "Placeholder: the generated PR description would appear here.",
-        "manualFixes": ["Placeholder: what was changed by hand would be listed here."]
+        "text": "No PR description: the run stopped at implement-2. model call failed: claude -p exited 1: {\"is_error\":true,\"duration_api_ms\":0,\"num_turns\":1,\"stop_reason\":\"stop_sequence\",\"session_id\":\"d08f3c37-96ea-41f4-bfff-31dfa5c79f4b\",\"total_cost_usd\":0,\"usage\":{\"output_tokens_details\":{\"thinking_tokens\":0},\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"api_error\",\"fast_mode_state\":\"off\",\"subtype\":\"success\",\"api_error_status\":429,\"result\":\"You've hit your session limit · resets 11:20pm (Asia/Calcutta)\",\"type\":\"result\",\"duration_ms\":622,\"uuid\":\"f593cab1-d129-4d73-854e-f8b5b2d377c4\"}\nClient.listTools() called but server does not advertise tools capability - returning empty list",
+        "manualFixes": [
+          "Extend OrderIndependenceTest's generated batch with a stale request so generatedBatchCoversEveryKindOfProblem covers STALE (the gate failure; attempt 2 would have received exactly this failure but never ran).",
+          "Time bomb: the Spring-wired validator uses the system clock with the 30-day default, and sample-batch.json is dated 2026-10-20, so from 2026-11-20 the demo sample and the Spring-context API tests would report every request as STALE. Pin a clock (or max-age) for those tests and make the sample dates relative, or exempt the sample.",
+          "Web UI: add STALE to the front end's problem codes, labels, stage mapping and colours (the agent may only edit backend/src)."
+        ],
+        "reviewed": true,
+        "reviewNotes": [
+          "Stopped at implement-2 because the Claude account behind claude -p hit its session usage limit (HTTP 429, 'resets 11:20pm'); both the call and its one retry failed instantly. Not an agent failure, but the run did not complete, so the story was rerun once the limit reset.",
+          "Design choices worth keeping: app.staleness.max-age as a Duration with a positive-only check; staleness off for the no-arg constructor so existing fixtures stay valid; stale requests rejected in validate so they never reach deduplication; messages quote the configured threshold rather than the request's age, so they don't change day to day."
+        ]
+      }
+    },
+    {
+      "id": "2026-10-29-stale-requests-3",
+      "title": "Flag stale requests",
+      "date": "2026-10-29",
+      "story": "As a maintenance supervisor, I want requests older than 30 days to be flagged as stale in\nthe problems list, so that old reports that may no longer be relevant get reviewed instead\nof silently joining the queue.\n\n\"Older than 30 days\" is measured against the time the batch is processed. A stale request\nis reported as a problem; whether it is also kept out of the queue is a decision the\nacceptance criteria must state explicitly.",
+      "outcome": "stopped",
+      "stoppedAt": "gate",
+      "branch": "agent/stale-requests",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 888,
+      "costUsd": 2.9231,
+      "enrich": {
+        "criteria": [
+          {
+            "given": "the ProblemCode enum",
+            "when": "its values are listed",
+            "then": "a sixth constant STALE exists, appended last so existing constants keep their order: NULL_REQUEST, MISSING_FIELD, INVALID_VALUE, DUPLICATE, CONFLICTING_REQUEST_ID, STALE"
+          },
+          {
+            "given": "the new static factory Problem.stale(int inputIndex, String requestId, Instant requestedAt, Duration maxAge)",
+            "when": "called with 3, \"R-7\", 2026-09-01T08:00:00Z and Duration.ofDays(30)",
+            "then": "it returns a Problem with inputIndex 3, requestId \"R-7\", code STALE, field \"requestedAt\", null relatedRequestId/escalatedFrom/escalatedTo and message exactly \"R-7 is stale: requestedAt 2026-09-01T08:00:00Z is more than 30 days old\" (day count from maxAge.toDays(); no input index in the message)"
+          },
+          {
+            "given": "a validator built with the new constructor WorkRequestValidator(Clock clock, Duration maxAge) using Clock.fixed(2026-10-20T08:00:00Z, UTC) and Duration.ofDays(30)",
+            "when": "validate is called with otherwise valid R-1 requestedAt 2026-09-01T08:00:00Z and R-2 requestedAt 2026-10-19T08:00:00Z",
+            "then": "StageResult.requests holds only R-2 and problems hold exactly one STALE problem for R-1 at its input index: a stale request is both reported as a problem and kept out of the queue"
+          },
+          {
+            "given": "the same validator (fixed clock, 30 days), with clock.instant() read once per validate call so all requests share one \"now\"",
+            "when": "validate is called with requests requestedAt 2026-09-20T08:00:00Z (exactly 30 days), 2026-09-20T07:59:59Z (one second older) and 2026-11-01T08:00:00Z (future)",
+            "then": "only the one-second-older request is STALE; staleness is strictly requestedAt.isBefore(now.minus(maxAge)), and future dates are accepted with no problem"
+          },
+          {
+            "given": "a validator with a fixed clock and 30 day max age",
+            "when": "validate is called with (a) a null element, (b) a 90-day-old request also missing equipmentId, (c) a 90-day-old request whose requestedAt is reported unreadable via invalidFieldsByIndex",
+            "then": "(a) yields only NULL_REQUEST, (b) only the MISSING_FIELD problem for equipmentId, (c) only the INVALID_VALUE problem for requestedAt — field checks run first and a request with any field problem is never checked for staleness, so a STALE problem always has a non-null requestId"
+          },
+          {
+            "given": "a validator with Clock.fixed(2026-10-20T08:00:00Z, UTC) and 30 days",
+            "when": "validate is called with 3 requests of which R-7 is 90 days old and R-3 is missing description",
+            "then": "the StageTrace is stage \"validate\", in 3, out 1, notes exactly [\"R-3 rejected: missing description\", \"R-7 rejected: stale\"]: one naturally sorted note per rejected request, stale notes read \"<requestId> rejected: stale\" and contain no input index"
+          },
+          {
+            "given": "the preserved no-argument constructor new WorkRequestValidator() and the other existing constructors of DuplicateResolver, WorkRequestSorter and WorkRequestProcessor",
+            "when": "a batch of years-old but otherwise valid requests is validated through new WorkRequestValidator()",
+            "then": "no STALE problem is produced and every request is accepted — the no-arg constructor performs no staleness check, so existing tests including SampleBatchTest's 13 → 10 → 6 counts are unaffected; new WorkRequestValidator(null, Duration.ofDays(30)) and new WorkRequestValidator(Clock.systemUTC(), null) throw NullPointerException (\"clock\", \"maxAge\") and a maxAge under one day throws IllegalArgumentException"
+          },
+          {
+            "given": "a new @ConfigurationProperties(\"app.staleness\") record StalenessProperties(@DefaultValue(\"30d\") Duration maxAge) with the default also written in application.yml",
+            "when": "the context starts with no app.staleness property, then with app.staleness.max-age=7d, then with app.staleness.max-age=0d",
+            "then": "maxAge binds to Duration.ofDays(30), then Duration.ofDays(7); 0d or any value under one day fails startup with IllegalArgumentException containing \"app.staleness.max-age must be at least 1 day\""
+          },
+          {
+            "given": "ProcessingConfig",
+            "when": "the Spring context starts",
+            "then": "it exposes exactly one java.time.Clock bean named \"clock\" defaulting to Clock.systemUTC() (replaceable by Clock.fixed(...) in tests) and builds the WorkRequestValidator bean from that Clock and StalenessProperties.maxAge, so a batch posted to the API containing a request requestedAt more than 30 days before the clock returns a ProblemDto with code \"STALE\" and field \"requestedAt\" and omits that request from the queue"
+          },
+          {
+            "given": "a processor built from a staleness-aware validator (fixed clock, 30 days), the real DuplicateResolver and WorkRequestSorter, and a batch where recent MEDIUM R-1 and 90-day-old CRITICAL R-2 share equipmentId and normalized description, alongside invalid requests and duplicates",
+            "when": "the batch is processed 100 times in shuffled order",
+            "then": "every run gives the identical queue, problems and trace: R-2 produces only a STALE problem with no DUPLICATE problem, R-1 stays in the queue at MEDIUM with no escalation, the trace still has exactly three entries validate/deduplicate/prioritize with validate out == deduplicate in, validate-stage problems (stale and field problems interleaved by input index) precede deduplicate-stage problems, and BatchObserver has a counter for STALE following the existing per-ProblemCode naming scheme that increments once per stale problem"
+          }
+        ],
+        "affectedClasses": [
+          "ProblemCode",
+          "Problem",
+          "WorkRequestValidator",
+          "StalenessProperties",
+          "ProcessingConfig",
+          "BatchObserver"
+        ],
+        "outOfScope": [
+          "Changing sample-batch.json or the pinned SampleBatchTest expectations",
+          "Flagging requests whose requestedAt is in the future, or any clock-skew tolerance",
+          "Marking stale requests as a non-blocking warning that still enters the queue",
+          "A per-priority or per-equipment staleness threshold",
+          "Re-checking staleness in the deduplicate or prioritize stages, or a new API field/endpoint for stale counts",
+          "Replacing Instant.now() usages elsewhere in the codebase with the new Clock bean"
+        ]
+      },
+      "implement": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "summary": "placeholder",
+            "diffLines": 0
+          },
+          {
+            "attempt": 2,
+            "summary": "Added a sixth ProblemCode constant STALE plus a Problem.stale(...) factory whose message quotes the requestedAt instant and maxAge.toDays(). WorkRequestValidator gained a (Clock, Duration) constructor (null-checked, minimum one day) alongside the preserved no-arg constructor; it reads clock.instant() once per validate call and rejects requests strictly older than now.minus(maxAge) only after all field checks pass, adding a \"&lt;requestId&gt; rejected: stale\" trace note and keeping them out of the queue. Wired it up with a new StalenessProperties record bound to app.staleness and a new Clock bean in ProcessingConfig; BatchObserver already registers one counter per ProblemCode, so STALE is covered automatically.",
+            "diffLines": 105
+          }
+        ]
+      },
+      "writeTests": {
+        "testNames": [
+          "StaleProblemTest.listsStaleAsSixthAndLastProblemCode",
+          "StaleProblemTest.staleFactoryKeepsInputIndexAndRequestId",
+          "StaleProblemTest.staleFactoryUsesStaleCodeAndRequestedAtField",
+          "StaleProblemTest.staleFactoryLeavesRelationAndEscalationFieldsUnset",
+          "StaleProblemTest.staleMessageNamesRequestIdTimestampAndMaxAgeInDays",
+          "StaleProblemTest.staleMessageTakesItsDayCountFromTheGivenMaxAge",
+          "StaleProblemTest.staleMessageOmitsTheInputIndex",
+          "StalenessValidationTest.keepsStaleRequestOutOfTheValidatedQueue",
+          "StalenessValidationTest.reportsOneStaleProblemForTheStaleRequestAtItsInputIndex",
+          "StalenessValidationTest.acceptsRequestExactlyAtTheMaxAge",
+          "StalenessValidationTest.flagsOnlyTheRequestOneSecondOlderThanTheMaxAge",
+          "StalenessValidationTest.acceptsRequestDatedInTheFuture",
+          "StalenessValidationTest.readsTheClockOncePerValidateCallSoEveryRequestSharesOneNow",
+          "StalenessValidationTest.reportsOnlyNullRequestForANullElement",
+          "StalenessValidationTest.reportsOnlyTheMissingFieldForAnOldRequestThatIsAlsoIncomplete",
+          "StalenessValidationTest.reportsOnlyTheInvalidValueForAnOldRequestWithAnUnreadableRequestedAt",
+          "StalenessValidationTest.givesEveryStaleProblemANonNullRequestId",
+          "StalenessValidationTest.tracesOneSortedNotePerRejectedRequestIncludingStaleOnes",
+          "StalenessValidationTest.tracesValidateCountsWithStaleRequestsLeftOutOfTheOutput",
+          "StalenessValidationTest.noArgumentValidatorAcceptsYearsOldRequests",
+          "StalenessValidationTest.processorBuiltFromTheExistingConstructorsAcceptsYearsOldRequests",
+          "StalenessValidationTest.rejectsANullClock",
+          "StalenessValidationTest.rejectsANullMaxAge",
+          "StalenessValidationTest.rejectsAMaxAgeShorterThanOneDay",
+          "StalenessOrderIndependenceTest.producesTheSameQueueForEveryInputOrder",
+          "StalenessOrderIndependenceTest.producesTheSameProblemsForEveryInputOrder",
+          "StalenessOrderIndependenceTest.producesTheSameTraceForEveryInputOrder",
+          "StalenessOrderIndependenceTest.reportsTheStaleTwinOnlyAsStaleAndNeverAsDuplicate",
+          "StalenessOrderIndependenceTest.keepsTheRecentTwinInTheQueueAtItsOwnPriority",
+          "StalenessOrderIndependenceTest.escalatesNothingWhenTheOnlyHigherPriorityTwinIsStale",
+          "StalenessOrderIndependenceTest.keepsTheThreeStageTraceWithValidateOutputFeedingDeduplicateInput",
+          "StalenessOrderIndependenceTest.listsValidateStageProblemsBeforeDeduplicateStageProblems",
+          "StalenessOrderIndependenceTest.ordersValidateStageProblemsByInputIndexWithStaleProblemsInterleaved",
+          "StalenessPropertiesTest.maxAgeDefaultsToThirtyDaysWhenThePropertyIsAbsent",
+          "StalenessPropertiesTest.bindsMaxAgeFromTheProperty",
+          "StalenessPropertiesTest.failsStartupWhenMaxAgeIsZero",
+          "StalenessPropertiesTest.failsStartupWhenMaxAgeIsUnderOneDay",
+          "ClockBeanTest.exposesExactlyOneClockBeanNamedClock",
+          "ClockBeanTest.clockBeanDefaultsToTheSystemUtcClock",
+          "ClockBeanTest.buildsASingleWorkRequestValidatorBean",
+          "StaleRequestWiringTest.defaultsTheConfiguredMaxAgeToThirtyDays",
+          "StaleRequestWiringTest.reportsAStaleProblemForARequestOlderThanThirtyDaysBeforeTheClock",
+          "StaleRequestWiringTest.leavesTheStaleRequestOutOfTheQueue",
+          "ConfiguredStalenessMaxAgeWiringTest.flagsARequestOlderThanTheConfiguredSevenDays",
+          "ConfiguredStalenessMaxAgeWiringTest.acceptsARequestYoungerThanTheConfiguredSevenDays",
+          "StaleProblemMetricsTest.registersTheStaleRejectionCounterBeforeAnyStaleProblemArrives",
+          "StaleProblemMetricsTest.countsOneStaleRejectionPerStaleProblem"
+        ]
+      },
+      "gate": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "passed": false,
+            "rejectedBeforeGate": "no file changes found in the diff (missing 'diff --git' or '---/+++' headers)"
+          },
+          {
+            "attempt": 2,
+            "passed": false,
+            "failingTest": "OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem",
+            "output": "[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.069 s <<< FAILURE! -- in com.tanya.workrequests.processing.OrderIndependenceTest\n[ERROR] com.tanya.workrequests.processing.OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem -- Time elapsed: 0.006 s <<< FAILURE!\njava.lang.AssertionError: \n\nExpecting ArrayList:\n  [MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    INVALID_VALUE,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    INVALID_VALUE,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    NULL_REQUEST,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    DUPLICATE,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID,\n    CONFLICTING_REQUEST_ID]\nto contain:\n  [NULL_REQUEST,\n    MISSING_FIELD,\n    INVALID_VALUE,\n    DUPLICATE,\n    CONFLICTING_REQUEST_ID,\n    STALE]\nbut could not find the following element(s):\n  [STALE]\n\n\tat com.tanya.workrequests.processing.OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem(OrderIndependenceTest.java:59)\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:580)\n\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1596)\n\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1596)\n\n2026-10-30T02:07:28.749+05:30  INFO 7576 --- [work-request-service] [           main] t.c.s.AnnotationConfigContextLoaderUtils : Could not detect default configuration classes for test class [com.tanya.workrequests.api.UnexpectedErrorTest]"
+          }
+        ]
+      },
+      "summary": {
+        "text": "No PR description: the run stopped at gate. no attempt passed the gate in 2 tries",
+        "manualFixes": [
+          "Extend OrderIndependenceTest's generated batch with one request older than 30 days so generatedBatchCoversEveryKindOfProblem covers STALE; this is the gate failure on attempt 2. The agent never saw that failure: attempt 1 was rejected before the gate, so the retry's feedback was the rejection, not the test output.",
+          "Time bomb: the Spring-wired validator uses the system clock with max-age 30d, while sample-batch.json is dated 2026-10-20. From 2026-11-20 the demo sample and the Spring-context tests that post it (WorkRequestControllerTest, SmokeTest, ApplicationWiringTest) would report every request as STALE. Pin a clock or max-age in those tests and make the sample dates relative to today (or exempt the sample).",
+          "Web UI: add STALE to the front end's problem codes, labels, stage mapping and colours (the agent may only edit backend/src)."
+        ],
+        "reviewed": true,
+        "reviewNotes": [
+          "Attempt 1 was a degenerate model answer: about 9,600 output tokens, then the structured output {\"diff\": \"placeholder\", \"summary\": \"placeholder\"}. The guardrails rejected it correctly. The output schema now requires a real diff header, so a reply like that uses the stage's one JSON retry instead of an Implement attempt.",
+          "Design is the same as the second run and sound: app.staleness.max-age (Duration, at least 1 day), staleness off for the no-arg constructor so existing fixtures stay valid, stale requests rejected in validate before deduplication, and 12 new test classes written from the criteria only."
+        ]
+      }
+    },
+    {
+      "id": "2026-10-29-safety-critical-escalation",
+      "title": "Auto-escalate safety-critical equipment",
+      "date": "2026-10-29",
+      "story": "As a maintenance planner, I want requests for equipment on a safety-critical list to be\nauto-escalated to Critical, so that a low-priority report about, say, a fire pump or an\nelevator brake is never left waiting behind routine work.\n\nThe list of safety-critical equipment ids is configuration, not code. Escalated requests\nshould still be explainable: the response must make it clear that a request was raised\nto Critical because its equipment is safety-critical.",
+      "outcome": "stopped",
+      "stoppedAt": "enrich",
+      "branch": "agent/safety-critical-escalation",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 1418,
+      "costUsd": 0.3605,
+      "enrich": {
+        "criteria": [],
+        "affectedClasses": [],
+        "outOfScope": []
+      },
+      "implement": {
+        "attempts": []
+      },
+      "writeTests": {
+        "testNames": []
+      },
+      "gate": {
+        "attempts": []
+      },
+      "summary": {
+        "text": "No PR description: the run stopped at enrich. invalid JSON twice: criteria: [{'given': 'no `app.safety.critical-equipment-ids` configured (property absent, or `new WorkRequestSorter()` / `new WorkRequestProcessor(validator, resolver, sorter)` used directly)', 'when': 'any batch is processed', 'then': \"no request's priority changes, no `SAFETY_ESCALATION` problem is produced, and the prioritize stage's queue, problems and trace are byte-for-byte what they are today (the 13-request sample batch still yields its pinned queue, problems and trace counts 13 → 10 → 6)\"}, {'given': '`application.yml` / a Spring environment', 'when': '`SafetyProperties` is bound', 'then': 'it is a record `SafetyProperties(@ConfigurationProperties(\"app.safety\")` prefix) with a single component `List<String> criticalEquipmentIds` bound from `app.safety.critical-equipment-ids`, defaulting to an empty immutable list when the key is absent; the accessor never returns null; null and blank entries in the configured list are ignored; duplicate entries have no extra effect'}, {'given': '`app.safety.critical-equipment-ids` contains `PUMP-7`, and a valid request `REQ-1` for `equipmentId` `PUMP-7` with priority `LOW` at input index 3', 'when': 'the batch is processed', 'then': 'the queued `WorkRequest` for `REQ-1` has priority `CRITICAL` (built via `withPriority`), and exactly one `Problem` is returned with `inputIndex` 3, `requestId` `REQ-1`, `code` `ProblemCode.SAFETY_ESCALATION`, `escalatedFrom` `LOW`, `escalatedTo` `CRITICAL`, `field` null, `relatedRequestId` null, and `message` exactly `REQ-1 escalated LOW to CRITICAL because equipment PUMP-7 is safety-critical`'}, {'given': 'the `Problem` domain record', 'when': '`Problem.safetyEscalation(int inputIndex, String requestId, String equipmentId, Priority escalatedFrom)` is called', 'then': 'it returns a problem with `code` `SAFETY_ESCALATION`, `escalatedTo` always `Priority.CRITICAL`, `escalatedFrom` as passed, `field` and `relatedRequestId` null, and the message format `<requestId> escalated <escalatedFrom> to CRITICAL because equipment <equipmentId> is safety-critical`; `ProblemCode` gains the constant `SAFETY_ESCALATION` as its last constant, leaving the existing constants and their order unchanged'}, {'given': '`PUMP-7` is configured safety-critical and request `REQ-9` for `PUMP-7` already has priority `CRITICAL`', 'when': 'the batch is processed', 'then': '`REQ-9` stays `CRITICAL`, no `SAFETY_ESCALATION` problem is produced for it, and no escalation note mentions it (escalation only applies when the current priority weight is below `CRITICAL.weight()`)'}, {'given': '`PUMP-7` is configured safety-critical and a valid `LOW` request for `equipmentId` `CONVEYOR-2`', 'when': 'the batch is processed', 'then': 'that request keeps priority `LOW` and produces no `SAFETY_ESCALATION` problem'}, {'given': '`app.safety.critical-equipment-ids` contains `  pump-7 ` (mixed case, surrounding whitespace) and a `MEDIUM` request whose `equipmentId` is `PUMP-7`', 'when': 'the batch is processed', 'then': \"the request is escalated to `CRITICAL`; matching trims and ignores ASCII case on both the configured ids and the request's `equipmentId`, and the message quotes the request's own `equipmentId` value as submitted (`PUMP-7`), not the configured spelling\"}, {'given': '`PUMP-7` is safety-critical and two duplicate requests for `PUMP-7` (kept `REQ-1` at `LOW`, duplicate `REQ-2` at `HIGH`) in one batch', 'when': 'the batch is processed', 'then': 'escalation runs after deduplication and before sorting: `REQ-1` is first raised to `HIGH` by the duplicate rule, then to `CRITICAL` by safety escalation, so the returned problems are the `DUPLICATE` problem for `REQ-2` (escalatedFrom `LOW`, escalatedTo `HIGH`) followed by a `SAFETY_ESCALATION` problem for `REQ-1` with `escalatedFrom` `HIGH` and `escalatedTo` `CRITICAL`, and the queued `REQ-1` is `CRITICAL`'}, {'given': 'a request for safety-critical equipment that is missing `description` (or has an invalid `priority`)', 'when': 'the batch is processed', 'then': 'validation still runs first: the request is rejected with its `MISSING_FIELD` / `INVALID_VALUE` problems only, it never reaches escalation, no `SAFETY_ESCALATION` problem is produced for it, and it is not in the queue'}, {'given': 'a batch containing escalated and non-escalated requests', 'when': 'the same batch is processed in 100 shuffled orders', 'then': 'the queue, the full problem list and the trace are identical every time; escalated requests sort with `CRITICAL.weight()` (so above `HIGH` requests), ties broken by `requestedAt` ascending then `requestId` ascending, and within the prioritize stage the `SAFETY_ESCALATION` problems are ordered by ascending `inputIndex`'}, {'given': 'a batch in which two requests are escalated', 'when': 'the `ProcessingResult` trace is inspected', 'then': \"the trace still has exactly three entries `validate`, `deduplicate`, `prioritize`; the `prioritize` entry's `in` and `out` both equal the number of requests reaching that stage (escalation drops nothing), and its `notes` contain one note per escalated request equal to that request's `SAFETY_ESCALATION` problem message, sorted in natural order and free of input indices\"}, {'given': 'the processing classes', 'when': 'escalation is implemented', 'then': 'a new framework-free class `SafetyEscalator` exists with constructors `SafetyEscalator(java.util.Collection<String> criticalEquipmentIds)` and `SafetyEscalator(SafetyProperties properties)` and a method `StageResult escalate(List<IndexedRequest> requests)` returning the escalated requests (input order preserved), the `SAFETY_ESCALATION` problems ordered by `inputIndex`, and a `StageTrace` with stage name `prioritize`, `in` == `out` == `requests.size()` and the sorted escalation notes; `WorkRequestSorter` gains a `WorkRequestSorter(SafetyEscalator)` constructor used by `sort`, while the existing no-arg `WorkRequestSorter()` keeps working by defaulting to an escalator with no configured ids'}, {'given': 'the Spring context', 'when': 'the application starts', 'then': '`ProcessingConfig` declares a `SafetyEscalator` bean built from the `SafetyProperties` bean and passes it to the `WorkRequestSorter` bean; `SafetyProperties` is picked up by the existing `@ConfigurationPropertiesScan`; no `@Component` annotations are added to main code; a context started without `app.safety.*` set still starts and escalates nothing'}, {'given': 'a POST of a batch containing one request for configured safety-critical equipment at `LOW`', 'when': 'the API response is read', 'then': \"the queued request's `priority` is `CRITICAL` and the response contains a problem whose `code` is `SAFETY_ESCALATION` with `escalatedFrom` `LOW`, `escalatedTo` `CRITICAL` and the explanatory message, so the escalation reason is visible without parsing free text beyond the equipment id\"}, {'given': '`BatchObserver` metrics and the generated order-independence batch', 'when': 'a batch containing a safety escalation is observed', 'then': '`BatchObserver` records a counter for `ProblemCode.SAFETY_ESCALATION` using the same naming scheme as the existing per-code counters (one counter per `ProblemCode` value, including the new one), and the generated batch used by `OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem` includes a request on configured safety-critical equipment so that every `ProblemCode` value, `SAFETY_ESCALATION` included, is produced'}] is too long",
+        "manualFixes": [],
+        "reviewed": true,
+        "reviewNotes": [
+          "Partly an infrastructure failure: the Mac went to sleep at 03:14 IST, the minute the run started, and only woke briefly for maintenance until after it ended (pmset log). caffeinate cannot override lid-closed sleep on battery. The first Enrich call gave no answer within the 15-minute wall-clock deadline.",
+          "The retry did run and is a genuine result: it returned 15 acceptance criteria, over the schema's limit of 12, so Enrich stopped as designed. The criteria were detailed and plausible (app.safety.critical-equipment-ids, a SAFETY_ESCALATION marker, no change when unconfigured) but too many for one story."
+        ]
+      }
+    },
+    {
+      "id": "2026-10-30-low-priority-cap",
+      "title": "Cap Low-priority requests per batch",
+      "date": "2026-10-30",
+      "story": "As an operations lead, I want a per-batch cap on Low-priority requests, so that one sender\nflooding a batch with Low work can't crowd out everything else.\n\nThe cap is configurable. Requests over the cap are reported as problems, never silently\ndropped, and which Low requests are kept must not depend on the order of the input.",
+      "outcome": "passed",
+      "stoppedAt": null,
+      "branch": "agent/low-priority-cap",
+      "llm": {
+        "backend": "claude-cli",
+        "models": [
+          "claude-opus-5"
+        ]
+      },
+      "durationSeconds": 945,
+      "costUsd": 3.6098,
+      "enrich": {
+        "criteria": [
+          {
+            "given": "a cap of 2 and a batch of 5 LOW requests with distinct requestedAt plus 3 non-LOW requests, all passing validation and deduplication",
+            "when": "WorkRequestProcessor.process(batch) runs",
+            "then": "the accepted queue holds the 2 LOW requests with the earliest requestedAt plus all 3 non-LOW requests, and the other 3 LOW requests are reported as problems with code ProblemCode.OVER_LOW_PRIORITY_CAP (never silently dropped); only Priority.LOW counts against the cap"
+          },
+          {
+            "given": "a cap of 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z",
+            "when": "the cap is applied",
+            "then": "'A-1' is kept and 'B-2' is reported over cap: ties on requestedAt break by requestId ascending, the same ordering the sorter already uses"
+          },
+          {
+            "given": "any batch containing more LOW requests than the cap",
+            "when": "the same batch is shuffled and processed 100 times",
+            "then": "the accepted queue, the set of over-cap requestIds and the trace are identical every time"
+          },
+          {
+            "given": "a cap of 0",
+            "when": "a batch of 2 LOW and 1 HIGH request is processed",
+            "then": "only the HIGH request is accepted and both LOW requests get OVER_LOW_PRIORITY_CAP problems; a cap of 0 is legal and means no Low work is accepted"
+          },
+          {
+            "given": "a cap of 0 and two duplicates whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM",
+            "when": "the batch is processed",
+            "then": "the kept request is accepted with no cap problem: the cap uses the priority as it stands after the deduplicate stage"
+          },
+          {
+            "given": "a LOW request 'WR-9' at input index 4 over a cap of 2",
+            "when": "Problem.overLowPriorityCap(4, \"WR-9\", 2) is called",
+            "then": "the Problem has inputIndex 4, requestId 'WR-9', code OVER_LOW_PRIORITY_CAP, null field, relatedRequestId, escalatedFrom and escalatedTo, and message exactly \"WR-9 exceeds the per-batch Low-priority cap of 2\"; OVER_LOW_PRIORITY_CAP is appended last in ProblemCode and BatchObserver still increments one counter per ProblemCode value"
+          },
+          {
+            "given": "a cap of 1, a batch that also yields validation and duplicate problems, and over-cap LOW requests 'L-2' at input index 7 and 'L-3' at input index 3",
+            "when": "the ProcessingResult is read",
+            "then": "cap problems appear in the prioritize stage, after validate and deduplicate problems and ordered by input index (index 3 before index 7); the prioritize StageTrace has stage \"prioritize\", out == in - 2, and notes exactly [\"L-2 dropped: over Low-priority cap of 1\", \"L-3 dropped: over Low-priority cap of 1\"] sorted naturally with no input indices"
+          },
+          {
+            "given": "a batch with no LOW request over the cap, an empty batch, or a null batch",
+            "when": "the batch is processed",
+            "then": "no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize"
+          },
+          {
+            "given": "an application context with no app.batch.max-low-priority configured",
+            "when": "BatchProperties is bound",
+            "then": "maxLowPriority() is 1000 (@DefaultValue(\"1000\") on the new second component) and maxSize() is still 5000, and ProcessingConfig builds the WorkRequestSorter bean with BatchProperties.maxLowPriority()"
+          },
+          {
+            "given": "app.batch.max-low-priority = -1",
+            "when": "BatchProperties is bound or constructed",
+            "then": "IllegalArgumentException is thrown with message \"app.batch.max-low-priority must be at least 0, was -1\"; 0 and positive values are accepted"
+          },
+          {
+            "given": "existing callers of new BatchProperties(5000), new WorkRequestSorter(), new WorkRequestProcessor(validator, resolver, sorter) and the 13-request sample batch",
+            "when": "they are compiled and run after the change",
+            "then": "they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, the no-arg WorkRequestSorter() applies no cap, capping is reached only via new WorkRequestSorter(int maxLowPriority), and the sample batch still gives the same queue, problems and counts 13 → 10 → 6"
+          }
+        ],
+        "affectedClasses": [
+          "ProblemCode",
+          "Problem",
+          "WorkRequestSorter",
+          "BatchProperties",
+          "ProcessingConfig",
+          "BatchObserver"
+        ],
+        "outOfScope": [
+          "Caps for MEDIUM, HIGH or CRITICAL priorities",
+          "Per-sender or per-equipment quotas rather than a per-batch cap",
+          "Changing the existing sort order or deduplication rules",
+          "Exposing the cap or remaining Low capacity in the API response DTOs",
+          "Rejecting a whole batch when the cap is exceeded",
+          "Introducing a Clock bean or any time-based staleness logic"
+        ]
+      },
+      "implement": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "summary": "Added `ProblemCode.OVER_LOW_PRIORITY_CAP` (appended last) with a matching `Problem.overLowPriorityCap(inputIndex, requestId, cap)` factory, and taught `WorkRequestSorter` an optional per-batch Low cap: it sorts first, keeps the earliest `cap` LOW requests (ties by requestId, the order the stage already uses), reports the rest as problems ordered by input index, and emits sorted \"`<id>` dropped: over Low-priority cap of `<cap>`\" notes while shrinking the prioritize trace's `out`. `BatchProperties` gained a second component `maxLowPriority` with `@DefaultValue(\"1000\")` and a \">= 0\" check, keeping the one-arg constructor delegating to 1000, and `ProcessingConfig` now builds the sorter from `BatchProperties.maxLowPriority()`; `BatchObserver` needed no change since it already registers one counter per `ProblemCode` value.",
+            "diffLines": 101
+          },
+          {
+            "attempt": 2,
+            "summary": "The cap implementation itself (ProblemCode.OVER_LOW_PRIORITY_CAP, Problem.overLowPriorityCap, the capped WorkRequestSorter, BatchProperties.maxLowPriority and the ProcessingConfig wiring) is already on the branch; the context failed to start only because BatchProperties now has two constructors and Spring could no longer deduce which one to bind, so I marked the canonical compact constructor with @ConstructorBinding. I also extended OrderIndependenceTest so its generated batch is processed through a sorter with a Low cap of 1, which is the only way that batch can cover the newly appended ProblemCode value; the uncapped processor still drives both shuffle tests, so the sample batch and its 13 → 10 → 6 counts are untouched.",
+            "diffLines": 18
+          }
+        ]
+      },
+      "writeTests": {
+        "testNames": [
+          "LowPriorityCapTest.keepsTheEarliestLowRequestsUpToTheCapAndEveryNonLowRequest",
+          "LowPriorityCapTest.reportsEveryLowRequestBeyondTheCapAsAProblem",
+          "LowPriorityCapTest.countsOnlyLowPriorityRequestsAgainstTheCap",
+          "LowPriorityCapTest.keepsTheLowestRequestIdWhenRequestedAtTies",
+          "LowPriorityCapTest.reportsTheHigherRequestIdOfATieAsOverCap",
+          "LowPriorityCapTest.acceptsTheSameQueueWhateverTheInputOrder",
+          "LowPriorityCapTest.reportsTheSameOverCapRequestIdsWhateverTheInputOrder",
+          "LowPriorityCapTest.producesTheSameTraceWhateverTheInputOrder",
+          "LowPriorityCapTest.capOfZeroAcceptsOnlyRequestsThatAreNotLowPriority",
+          "LowPriorityCapTest.capOfZeroReportsEveryLowRequestAsOverCap",
+          "LowPriorityCapTest.acceptsADuplicateSurvivorEscalatedOutOfLowPriorityDespiteACapOfZero",
+          "LowPriorityCapTest.reportsNoCapProblemForADuplicateSurvivorEscalatedOutOfLowPriority",
+          "LowPriorityCapTest.listsCapProblemsAfterValidateAndDeduplicateProblemsOrderedByInputIndex",
+          "LowPriorityCapTest.prioritizeTraceLosesOneRequestPerCappedRequest",
+          "LowPriorityCapTest.cappingStageIsTracedAsPrioritize",
+          "LowPriorityCapTest.prioritizeTraceNotesEachCappedRequestByIdWithoutItsInputIndex",
+          "LowPriorityCapTest.prioritizeTraceNotesAreSortedNaturally",
+          "LowPriorityCapTest.cappedBatchStillTracesValidateDeduplicateAndPrioritize",
+          "LowPriorityCapTest.reportsNoCapProblemWhenEveryLowRequestFitsWithinTheCap",
+          "LowPriorityCapTest.prioritizeTraceKeepsEveryRequestWhenNothingIsCapped",
+          "LowPriorityCapTest.prioritizeTraceHasNoCapNoteWhenNothingIsCapped",
+          "LowPriorityCapTest.emptyBatchProducesNoCapProblem",
+          "LowPriorityCapTest.emptyBatchTracesAPrioritizeStageWithEqualInAndOut",
+          "LowPriorityCapTest.emptyBatchStillTracesValidateDeduplicateAndPrioritize",
+          "LowPriorityCapTest.nullBatchProducesNoCapProblem",
+          "LowPriorityCapTest.nullBatchTracesAPrioritizeStageWithEqualInAndOut",
+          "LowPriorityCapTest.nullBatchStillTracesValidateDeduplicateAndPrioritize",
+          "LowPriorityCapTest.sorterBuiltWithoutACapAcceptsEveryLowRequest",
+          "LowPriorityCapTest.sorterBuiltWithoutACapReportsNoProblems",
+          "OverLowPriorityCapProblemTest.carriesTheInputIndexOfTheCappedRequest",
+          "OverLowPriorityCapProblemTest.carriesTheRequestIdOfTheCappedRequest",
+          "OverLowPriorityCapProblemTest.usesTheOverLowPriorityCapCode",
+          "OverLowPriorityCapProblemTest.leavesFieldNullBecauseNoSingleFieldIsAtFault",
+          "OverLowPriorityCapProblemTest.leavesRelatedRequestIdNullBecauseNoOtherRequestIsInvolved",
+          "OverLowPriorityCapProblemTest.leavesTheEscalationFieldsNull",
+          "OverLowPriorityCapProblemTest.messageNamesTheRequestAndTheCapAndNeverTheInputIndex",
+          "OverLowPriorityCapProblemTest.messageReportsTheCapItWasGiven",
+          "OverLowPriorityCapProblemTest.overLowPriorityCapIsAppendedLastSoExistingCodesKeepTheirOrder",
+          "BatchPropertiesMaxLowPriorityTest.defaultsMaxLowPriorityToOneThousandWhenNotConfigured",
+          "BatchPropertiesMaxLowPriorityTest.keepsTheMaxSizeDefaultOfFiveThousandWhenNotConfigured",
+          "BatchPropertiesMaxLowPriorityTest.bindsAConfiguredMaxLowPriority",
+          "BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenConstructed",
+          "BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound",
+          "BatchPropertiesMaxLowPriorityTest.acceptsAMaxLowPriorityOfZero",
+          "BatchPropertiesMaxLowPriorityTest.acceptsAPositiveMaxLowPriority",
+          "BatchPropertiesMaxLowPriorityTest.singleArgumentConstructorStillDefaultsMaxLowPriorityToOneThousand",
+          "BatchPropertiesMaxLowPriorityTest.singleArgumentConstructorKeepsTheMaxSizeItIsGiven",
+          "BatchPropertiesMaxLowPriorityTest.stillRejectsAMaxSizeBelowOne",
+          "ProcessingConfigLowPriorityCapTest.sorterBeanCapsLowRequestsAtTheConfiguredMaxLowPriority",
+          "ProcessingConfigLowPriorityCapTest.sorterBeanReportsLowRequestsOverTheConfiguredMaxLowPriority",
+          "ProcessingConfigLowPriorityCapTest.sorterBeanAcceptsEveryLowRequestUnderTheDefaultCap",
+          "BatchObserverOverLowPriorityCapTest.registersOneRejectedCounterPerProblemCode",
+          "BatchObserverOverLowPriorityCapTest.reportsZeroCapProblemsBeforeAnyBatchIsObserved",
+          "BatchObserverOverLowPriorityCapTest.countsAnOverLowPriorityCapProblem"
+        ]
+      },
+      "gate": {
+        "attempts": [
+          {
+            "attempt": 1,
+            "passed": false,
+            "failingTest": "BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound",
+            "output": "[ERROR] Tests run: 3, Failures: 0, Errors: 3, Skipped: 0, Time elapsed: 1.047 s <<< FAILURE! -- in com.tanya.workrequests.SmokeTest\n[ERROR] com.tanya.workrequests.SmokeTest.doesNotExposeSensitiveActuatorEndpoints -- Time elapsed: 0.006 s <<< ERROR!\njava.lang.IllegalStateException: Failed to load ApplicationContext for [WebMergedContextConfiguration@38a147ba testClass = com.tanya.workrequests.SmokeTest, locations = [], classes = [com.tanya.workrequests.WorkRequestServiceApplication], contextInitializerClasses = [], activeProfiles = [], propertySourceDescriptors = [], propertySourceProperties = [\"org.springframework.boot.test.context.SpringBootTestContextBootstrapper=true\", \"server.port=0\"], contextCustomizers = [org.springframework.boot.test.context.filter.ExcludeFilterContextCustomizer@2301b75, org.springframework.boot.test.json.DuplicateJsonObjectContextCustomizerFactory$DuplicateJsonObjectContextCustomizer@6e1d4137, org.springframework.boot.test.mock.mockito.MockitoContextCustomizer@0, org.springframework.boot.test.web.client.TestRestTemplateContextCustomizer@42f9c19a, org.springframework.boot.test.web.reactor.netty.DisableReactorResourceFactoryGlobalResourcesContextCustomizerFactory$DisableReactorResourceFactoryGlobalResourcesContextCustomizerCustomizer@6345e7b9, org.springframework.boot.test.autoconfigure.OnFailureConditionReportContextCustomizerFactory$OnFailureConditionReportContextCustomizer@4cbf4f53, org.springframework.boot.test.autoconfigure.actuate.observability.ObservabilityContextCustomizerFactory$DisableObservabilityContextCustomizer@1f, org.springframework.boot.test.autoconfigure.properties.PropertyMappingContextCustomizer@0, org.springframework.boot.test.autoconfigure.web.servlet.WebDriverContextCustomizer@4e92466a, org.springframework.test.context.support.DynamicPropertiesContextCustomizer@0, org.springframework.boot.test.context.SpringBootTestAnnotation@5a32286], resourceBasePath = \"src/main/webapp\", contextLoader = org.springframework.boot.test.context.SpringBootContextLoader, parent = null]\n\tat org.springframework.test.context.cache.DefaultCacheAwareContextLoaderDelegate.loadContext(DefaultCacheAwareContextLoaderDelegate.java:180)\n\tat org.springframework.test.context.support.DefaultTestContext.getApplicationContext(DefaultTestContext.java:130)\n\tat org.springframework.test.context.support.DependencyInjectionTestExecutionListener.injectDependencies(DependencyInjectionTestExecutionListener.java:155)\n\tat org.springframework.test.context.support.DependencyInjectionTestExecutionListener.prepareTestInstance(DependencyInjectionTestExecutionListener.java:111)\n\tat org.springframework.test.context.TestContextManager.prepareTestInstance(TestContextManager.java:260)\n\tat org.springframework.test.context.junit.jupiter.SpringExtension.postProcessTestInstance(SpringExtension.java:159)\n\tat java.base/java.util.stream.ForEachOps$ForEachOp$OfRef.accept(ForEachOps.java:184)\n\tat java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeli"
+          },
+          {
+            "attempt": 2,
+            "passed": true
+          }
+        ]
+      },
+      "summary": {
+        "text": "## What changed\n\nAdds a configurable per-batch cap on `Priority.LOW` requests, applied in the existing prioritize stage.\n\n- **`ProblemCode`**: new `OVER_LOW_PRIORITY_CAP`, appended last so existing ordinals are unchanged.\n- **`Problem`**: new factory `overLowPriorityCap(inputIndex, requestId, cap)` producing message `\"<id> exceeds the per-batch Low-priority cap of <cap>\"` with `field`, `relatedRequestId`, `escalatedFrom`, `escalatedTo` all null.\n- **`WorkRequestSorter`**: new `WorkRequestSorter(int maxLowPriority)` constructor (rejects negatives); the existing no-arg constructor delegates to a `NO_CAP = Integer.MAX_VALUE` sentinel. Sorting is unchanged; after sorting, LOW requests past the cap are moved out of the accepted list into problems (sorted by input index). Trace notes become one `\"<id> dropped: over Low-priority cap of <cap>\"` line per capped request, sorted naturally; when nothing is capped the previous single sort note is returned unchanged.\n- **`BatchProperties`**: becomes a two-component record `(maxSize, maxLowPriority)` with `@DefaultValue(\"1000\")` on the new component and a `maxLowPriority >= 0` check; the canonical constructor is now annotated `@ConstructorBinding` because a retained one-arg `BatchProperties(int maxSize)` convenience constructor makes constructor selection ambiguous.\n- **`ProcessingConfig`**: the `WorkRequestSorter` bean is now built with `batchProperties.maxLowPriority()`.\n- **`BatchObserver`**: no production change; it already derives one counter per `ProblemCode` value, and a new test pins that.\n- **`OrderIndependenceTest`** (existing test, modified): `generatedBatchCoversEveryKindOfProblem` now runs through a second processor with a Low cap of 1, since a cap is the only way to produce the new code. The pre-existing uncapped processor and the sample-batch shuffle tests are untouched.\n\n## Criteria coverage\n\n1. **Cap of 2, 5 LOW + 3 non-LOW** — `LowPriorityCapTest.keepsTheEarliestLowRequestsUpToTheCapAndEveryNonLowRequest`, `reportsEveryLowRequestBeyondTheCapAsAProblem`, `countsOnlyLowPriorityRequestsAgainstTheCap`.\n2. **Ties break by requestId ascending** — `LowPriorityCapTest.keepsTheLowestRequestIdWhenRequestedAtTies`, `reportsTheHigherRequestIdOfATieAsOverCap` (uses the criterion's `B-2`/`A-1` at `2026-10-20T08:00:00Z`).\n3. **Identical output over 100 shuffles** — `LowPriorityCapTest.acceptsTheSameQueueWhateverTheInputOrder`, `reportsTheSameOverCapRequestIdsWhateverTheInputOrder`, `producesTheSameTraceWhateverTheInputOrder`.\n4. **Cap of 0** — `LowPriorityCapTest.capOfZeroAcceptsOnlyRequestsThatAreNotLowPriority`, `capOfZeroReportsEveryLowRequestAsOverCap`.\n5. **Escalated duplicate survivor exempt under cap 0** — `LowPriorityCapTest.acceptsADuplicateSurvivorEscalatedOutOfLowPriorityDespiteACapOfZero`, `reportsNoCapProblemForADuplicateSurvivorEscalatedOutOfLowPriority`.\n6. **`Problem.overLowPriorityCap` shape, message, enum position, one counter per code** — all nine `OverLowPriorityCapProblemTest` tests (including `overLowPriorityCapIsAppendedLastSoExistingCodesKeepTheirOrder`) plus `BatchObserverOverLowPriorityCapTest.registersOneRejectedCounterPerProblemCode`, `reportsZeroCapProblemsBeforeAnyBatchIsObserved`, `countsAnOverLowPriorityCapProblem`.\n7. **Problem ordering across stages, prioritize trace `out == in - 2` and notes** — `LowPriorityCapTest.listsCapProblemsAfterValidateAndDeduplicateProblemsOrderedByInputIndex`, `prioritizeTraceLosesOneRequestPerCappedRequest`, `cappingStageIsTracedAsPrioritize`, `prioritizeTraceNotesEachCappedRequestByIdWithoutItsInputIndex`, `prioritizeTraceNotesAreSortedNaturally`. *Partially covered:* the notes assertion filters notes containing `\"cap\"` rather than asserting the full `notes()` list, so an extra unrelated note would not fail the test.\n8. **Nothing over cap / empty / null batch, three trace entries** — `LowPriorityCapTest.reportsNoCapProblemWhenEveryLowRequestFitsWithinTheCap`, `prioritizeTraceKeepsEveryRequestWhenNothingIsCapped`, `prioritizeTraceHasNoCapNoteWhenNothingIsCapped`, `emptyBatch*` (3), `nullBatch*` (3), `cappedBatchStillTracesValidateDeduplicateAndPrioritize`.\n9. **Defaults 1000/5000 and sorter bean wiring** — `BatchPropertiesMaxLowPriorityTest.defaultsMaxLowPriorityToOneThousandWhenNotConfigured`, `keepsTheMaxSizeDefaultOfFiveThousandWhenNotConfigured`; `ProcessingConfigLowPriorityCapTest.sorterBeanCapsLowRequestsAtTheConfiguredMaxLowPriority`, `sorterBeanReportsLowRequestsOverTheConfiguredMaxLowPriority`, `sorterBeanAcceptsEveryLowRequestUnderTheDefaultCap`.\n10. **`-1` rejected with exact message; 0 and positives accepted** — `BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenConstructed`, `rejectsANegativeMaxLowPriorityWhenBound`, `acceptsAMaxLowPriorityOfZero`, `acceptsAPositiveMaxLowPriority`, `bindsAConfiguredMaxLowPriority`.\n11. **Existing callers keep compiling/behaving** — `BatchPropertiesMaxLowPriorityTest.singleArgumentConstructorStillDefaultsMaxLowPriorityToOneThousand`, `singleArgumentConstructorKeepsTheMaxSizeItIsGiven`, `stillRejectsAMaxSizeBelowOne`; `LowPriorityCapTest.sorterBuiltWithoutACapAcceptsEveryLowRequest`, `sorterBuiltWithoutACapReportsNoProblems`. The \"13 → 10 → 6 sample batch\" part has **no new test**; it rests on the pre-existing sample-batch tests that ran green in the passing gate.\n\n## Test results\n\n- **Attempt 1 — failed:** `BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound` (negative value not rejected on the binding path).\n- **Attempt 2 — passed:** full gate green with the final diff, which adds `@ConstructorBinding` to the canonical `BatchProperties` constructor so binding goes through the validating constructor.\n\n## Worth a closer look\n\n- **Trace notes change shape when capping happens.** With any capped request, the prioritize notes are *only* the cap lines — the long-standing `\"Sorted by priority (highest first), then requestedAt (earliest first), then requestId\"` note is dropped from that batch. The criterion asks for \"notes exactly [cap lines]\", so this matches the spec, but it is a behaviour change for anything reading the sort note; confirm nothing downstream depends on it.\n- **`@ConstructorBinding` on a record.** This was the fix for the attempt-1 failure. Worth confirming it behaves the same under the project's Spring Boot version at runtime (not only under `Binder` in the unit test), and that the one-arg convenience constructor is still worth keeping versus updating callers.\n- **The bound-negative test is loose.** `rejectsANegativeMaxLowPriorityWhenBound` unwraps to the root cause, so it passes whether Spring wraps the failure or not; it does not pin the exception type that binding actually surfaces to application startup.\n- **An existing test was modified.** `OrderIndependenceTest.generatedBatchCoversEveryKindOfProblem` now uses a cap-1 processor so `ProblemCode.values()` are all reachable. That test no longer exercises the uncapped processor on the generated batch; check that the loss of that coverage is acceptable.\n- **`NO_CAP = Integer.MAX_VALUE` sentinel.** Means \"uncapped\" is really \"capped very high\"; harmless for realistic batches, but it is not a distinct state, and a cap of `Integer.MAX_VALUE` configured explicitly is indistinguishable from no cap.\n- **Untested edges.** `WorkRequestSorter`'s own `IllegalArgumentException` for a negative cap has no test, and `Problem.overLowPriorityCap` with a null `requestId` falls back to `subject(...)` producing `\"Request exceeds the per-batch Low-priority cap of N\"` — neither is required by the criteria, just unverified.\n- **Cross-stage problem ordering** relies on how `WorkRequestProcessor` concatenates per-stage problem lists (unchanged in this diff); the sorter only sorts its own problems by input index. Criterion 7's ordering is asserted end-to-end in one test, so verify that assumption holds for batches where other stages emit problems with higher input indices.\n",
+        "manualFixes": [
+          "Web UI: add OVER_LOW_PRIORITY_CAP to the front end's problem codes, labels and colours, and map it to the prioritize stage in logic/stepping.ts (its problems come from the sorter, so the current validate/deduplicate mapping would never reveal them). The agent may only edit backend/src."
+        ],
+        "reviewed": true,
+        "reviewNotes": [
+          "The retry loop did its job: attempt 1 added a second BatchProperties constructor, which left Spring unable to pick one to bind, so every Spring context failed to start (first failure: BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound, written independently from the criteria). Attempt 2 received that output and fixed it with @ConstructorBinding on the canonical constructor.",
+          "OrderIndependenceTest: the every-code coverage test now runs through a processor capped at one Low request, the only way OVER_LOW_PRIORITY_CAP can appear. Its assertions are unchanged, so it isn't weaker; the guardrails didn't flag it because no assertion line changed. Worth a look anyway.",
+          "Design question for the reviewer: the cap lives in WorkRequestSorter (the prioritize stage), because which Low requests survive depends on the sort order. That's defensible, but the sorter now filters as well as sorts; a separate stage would keep one responsibility per class. Over-cap requests are reported as problems, never silently dropped, and the choice is order-independent (earliest requestedAt, then requestId)."
+        ]
       }
     }
   ]

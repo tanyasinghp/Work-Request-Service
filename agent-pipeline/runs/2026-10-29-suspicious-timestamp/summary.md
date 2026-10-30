@@ -97,4 +97,11 @@ Out of scope: Any configurable clock-skew tolerance or app.* property for the fu
 
 ## Manual fixes
 
-- Not reviewed yet.
+- Web UI: add SUSPICIOUS_TIMESTAMP to web/src/types.ts, PROBLEM_CODES/PROBLEM_LABELS (logic/problems.ts), STAGE_OF_CODE (logic/stepping.ts) and PROBLEM_STYLES (components/styles.ts). Without it the Problems lane silently drops the new problems and the input panel throws on the missing colour. The agent could not do this: it may only edit backend/src.
+
+## Review notes
+
+- Backend change reviewed and fine as is: Clock bean plus a WorkRequestValidator(Clock) overload, the no-arg constructor kept, now read once per batch, strictly-after comparison, unreadable dates stay INVALID_VALUE.
+- The OrderIndependenceTest edit flagged by the guardrails is legitimate: one future-dated request added to the generator, so the size assertion moved from 200 to 201.
+- Two tests use the real clock (now ± 1 hour) only to prove the no-arg constructor uses the system clock; acceptable.
+- Commit 644ffc6 ('add agentic pipeline') was made outside the pipeline during this run while the agent branch was checked out; it contains only this run's first five log files. The recorded final diff size (2409 lines) includes those 1688 log lines; the agent's own change is 721 lines in backend/src. The pipeline now stops if its branch changes underneath it.
