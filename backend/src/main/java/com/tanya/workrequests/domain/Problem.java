@@ -70,6 +70,15 @@ public record Problem(int inputIndex,
                 "Request id " + requestId + " is used by requests with different content");
     }
 
+    /**
+     * A Low-priority request that did not fit the per-batch Low cap. Reported rather than
+     * dropped silently, so a caller can see exactly which work was deferred.
+     */
+    public static Problem overLowPriorityCap(int inputIndex, String requestId, int cap) {
+        return new Problem(inputIndex, requestId, ProblemCode.OVER_LOW_PRIORITY_CAP, null, null, null, null,
+                subject(requestId) + " exceeds the per-batch Low-priority cap of " + cap);
+    }
+
     private static String subject(String requestId) {
         return requestId == null ? "Request" : requestId;
     }

@@ -31,8 +31,8 @@ public class ProcessingConfig {
     }
 
     @Bean
-    WorkRequestSorter workRequestSorter() {
-        return new WorkRequestSorter();
+    WorkRequestSorter workRequestSorter(BatchProperties batchProperties) {
+        return new WorkRequestSorter(batchProperties.maxLowPriority());
     }
 
     @Bean
