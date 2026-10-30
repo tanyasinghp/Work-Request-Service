@@ -1,0 +1,1106 @@
+# summarize: prompt
+
+## System
+
+You write the pull-request description for a change produced by an automated pipeline, for a
+human reviewer who will decide whether to merge it. Be factual and brief; never claim more
+than the diff and the test results show.
+
+Use these sections in Markdown: "## What changed", "## Criteria coverage" (each criterion and
+the test that checks it, or "not covered"), "## Test results" (each gate attempt), and
+"## Worth a closer look" (assumptions, risky spots, anything the reviewer should verify).
+Return JSON with one field, `markdown`.
+
+
+## User
+
+# Story
+
+# Cap Low-priority requests per batch
+
+As an operations lead, I want a per-batch cap on Low-priority requests, so that one sender
+flooding a batch with Low work can't crowd out everything else.
+
+The cap is configurable. Requests over the cap are reported as problems, never silently
+dropped, and which Low requests are kept must not depend on the order of the input.
+
+# Acceptance criteria
+
+```json
+{
+  "title": "Cap Low-priority requests per batch",
+  "criteria": [
+    {
+      "given": "a cap of 2 and a batch of 5 LOW requests with distinct requestedAt plus 3 non-LOW requests, all passing validation and deduplication",
+      "when": "WorkRequestProcessor.process(batch) runs",
+      "then": "the accepted queue holds the 2 LOW requests with the earliest requestedAt plus all 3 non-LOW requests, and the other 3 LOW requests are reported as problems with code ProblemCode.OVER_LOW_PRIORITY_CAP (never silently dropped); only Priority.LOW counts against the cap"
+    },
+    {
+      "given": "a cap of 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z",
+      "when": "the cap is applied",
+      "then": "'A-1' is kept and 'B-2' is reported over cap: ties on requestedAt break by requestId ascending, the same ordering the sorter already uses"
+    },
+    {
+      "given": "any batch containing more LOW requests than the cap",
+      "when": "the same batch is shuffled and processed 100 times",
+      "then": "the accepted queue, the set of over-cap requestIds and the trace are identical every time"
+    },
+    {
+      "given": "a cap of 0",
+      "when": "a batch of 2 LOW and 1 HIGH request is processed",
+      "then": "only the HIGH request is accepted and both LOW requests get OVER_LOW_PRIORITY_CAP problems; a cap of 0 is legal and means no Low work is accepted"
+    },
+    {
+      "given": "a cap of 0 and two duplicates whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM",
+      "when": "the batch is processed",
+      "then": "the kept request is accepted with no cap problem: the cap uses the priority as it stands after the deduplicate stage"
+    },
+    {
+      "given": "a LOW request 'WR-9' at input index 4 over a cap of 2",
+      "when": "Problem.overLowPriorityCap(4, \"WR-9\", 2) is called",
+      "then": "the Problem has inputIndex 4, requestId 'WR-9', code OVER_LOW_PRIORITY_CAP, null field, relatedRequestId, escalatedFrom and escalatedTo, and message exactly \"WR-9 exceeds the per-batch Low-priority cap of 2\"; OVER_LOW_PRIORITY_CAP is appended last in ProblemCode and BatchObserver still increments one counter per ProblemCode value"
+    },
+    {
+      "given": "a cap of 1, a batch that also yields validation and duplicate problems, and over-cap LOW requests 'L-2' at input index 7 and 'L-3' at input index 3",
+      "when": "the ProcessingResult is read",
+      "then": "cap problems appear in the prioritize stage, after validate and deduplicate problems and ordered by input index (index 3 before index 7); the prioritize StageTrace has stage \"prioritize\", out == in - 2, and notes exactly [\"L-2 dropped: over Low-priority cap of 1\", \"L-3 dropped: over Low-priority cap of 1\"] sorted naturally with no input indices"
+    },
+    {
+      "given": "a batch with no LOW request over the cap, an empty batch, or a null batch",
+      "when": "the batch is processed",
+      "then": "no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize"
+    },
+    {
+      "given": "an application context with no app.batch.max-low-priority configured",
+      "when": "BatchProperties is bound",
+      "then": "maxLowPriority() is 1000 (@DefaultValue(\"1000\") on the new second component) and maxSize() is still 5000, and ProcessingConfig builds the WorkRequestSorter bean with BatchProperties.maxLowPriority()"
+    },
+    {
+      "given": "app.batch.max-low-priority = -1",
+      "when": "BatchProperties is bound or constructed",
+      "then": "IllegalArgumentException is thrown with message \"app.batch.max-low-priority must be at least 0, was -1\"; 0 and positive values are accepted"
+    },
+    {
+      "given": "existing callers of new BatchProperties(5000), new WorkRequestSorter(), new WorkRequestProcessor(validator, resolver, sorter) and the 13-request sample batch",
+      "when": "they are compiled and run after the change",
+      "then": "they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, the no-arg WorkRequestSorter() applies no cap, capping is reached only via new WorkRequestSorter(int maxLowPriority), and the sample batch still gives the same queue, problems and counts 13 \u2192 10 \u2192 6"
+    }
+  ],
+  "affectedClasses": [
+    "ProblemCode",
+    "Problem",
+    "WorkRequestSorter",
+    "BatchProperties",
+    "ProcessingConfig",
+    "BatchObserver"
+  ],
+  "outOfScope": [
+    "Caps for MEDIUM, HIGH or CRITICAL priorities",
+    "Per-sender or per-equipment quotas rather than a per-batch cap",
+    "Changing the existing sort order or deduplication rules",
+    "Exposing the cap or remaining Low capacity in the API response DTOs",
+    "Rejecting a whole batch when the cap is exceeded",
+    "Introducing a Clock bean or any time-based staleness logic"
+  ]
+}
+```
+
+# Gate attempts
+
+- Attempt 1: failed (BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound)
+- Attempt 2: passed
+
+# Tests added (written from the criteria only)
+
+- LowPriorityCapTest.keepsTheEarliestLowRequestsUpToTheCapAndEveryNonLowRequest
+- LowPriorityCapTest.reportsEveryLowRequestBeyondTheCapAsAProblem
+- LowPriorityCapTest.countsOnlyLowPriorityRequestsAgainstTheCap
+- LowPriorityCapTest.keepsTheLowestRequestIdWhenRequestedAtTies
+- LowPriorityCapTest.reportsTheHigherRequestIdOfATieAsOverCap
+- LowPriorityCapTest.acceptsTheSameQueueWhateverTheInputOrder
+- LowPriorityCapTest.reportsTheSameOverCapRequestIdsWhateverTheInputOrder
+- LowPriorityCapTest.producesTheSameTraceWhateverTheInputOrder
+- LowPriorityCapTest.capOfZeroAcceptsOnlyRequestsThatAreNotLowPriority
+- LowPriorityCapTest.capOfZeroReportsEveryLowRequestAsOverCap
+- LowPriorityCapTest.acceptsADuplicateSurvivorEscalatedOutOfLowPriorityDespiteACapOfZero
+- LowPriorityCapTest.reportsNoCapProblemForADuplicateSurvivorEscalatedOutOfLowPriority
+- LowPriorityCapTest.listsCapProblemsAfterValidateAndDeduplicateProblemsOrderedByInputIndex
+- LowPriorityCapTest.prioritizeTraceLosesOneRequestPerCappedRequest
+- LowPriorityCapTest.cappingStageIsTracedAsPrioritize
+- LowPriorityCapTest.prioritizeTraceNotesEachCappedRequestByIdWithoutItsInputIndex
+- LowPriorityCapTest.prioritizeTraceNotesAreSortedNaturally
+- LowPriorityCapTest.cappedBatchStillTracesValidateDeduplicateAndPrioritize
+- LowPriorityCapTest.reportsNoCapProblemWhenEveryLowRequestFitsWithinTheCap
+- LowPriorityCapTest.prioritizeTraceKeepsEveryRequestWhenNothingIsCapped
+- LowPriorityCapTest.prioritizeTraceHasNoCapNoteWhenNothingIsCapped
+- LowPriorityCapTest.emptyBatchProducesNoCapProblem
+- LowPriorityCapTest.emptyBatchTracesAPrioritizeStageWithEqualInAndOut
+- LowPriorityCapTest.emptyBatchStillTracesValidateDeduplicateAndPrioritize
+- LowPriorityCapTest.nullBatchProducesNoCapProblem
+- LowPriorityCapTest.nullBatchTracesAPrioritizeStageWithEqualInAndOut
+- LowPriorityCapTest.nullBatchStillTracesValidateDeduplicateAndPrioritize
+- LowPriorityCapTest.sorterBuiltWithoutACapAcceptsEveryLowRequest
+- LowPriorityCapTest.sorterBuiltWithoutACapReportsNoProblems
+- OverLowPriorityCapProblemTest.carriesTheInputIndexOfTheCappedRequest
+- OverLowPriorityCapProblemTest.carriesTheRequestIdOfTheCappedRequest
+- OverLowPriorityCapProblemTest.usesTheOverLowPriorityCapCode
+- OverLowPriorityCapProblemTest.leavesFieldNullBecauseNoSingleFieldIsAtFault
+- OverLowPriorityCapProblemTest.leavesRelatedRequestIdNullBecauseNoOtherRequestIsInvolved
+- OverLowPriorityCapProblemTest.leavesTheEscalationFieldsNull
+- OverLowPriorityCapProblemTest.messageNamesTheRequestAndTheCapAndNeverTheInputIndex
+- OverLowPriorityCapProblemTest.messageReportsTheCapItWasGiven
+- OverLowPriorityCapProblemTest.overLowPriorityCapIsAppendedLastSoExistingCodesKeepTheirOrder
+- BatchPropertiesMaxLowPriorityTest.defaultsMaxLowPriorityToOneThousandWhenNotConfigured
+- BatchPropertiesMaxLowPriorityTest.keepsTheMaxSizeDefaultOfFiveThousandWhenNotConfigured
+- BatchPropertiesMaxLowPriorityTest.bindsAConfiguredMaxLowPriority
+- BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenConstructed
+- BatchPropertiesMaxLowPriorityTest.rejectsANegativeMaxLowPriorityWhenBound
+- BatchPropertiesMaxLowPriorityTest.acceptsAMaxLowPriorityOfZero
+- BatchPropertiesMaxLowPriorityTest.acceptsAPositiveMaxLowPriority
+- BatchPropertiesMaxLowPriorityTest.singleArgumentConstructorStillDefaultsMaxLowPriorityToOneThousand
+- BatchPropertiesMaxLowPriorityTest.singleArgumentConstructorKeepsTheMaxSizeItIsGiven
+- BatchPropertiesMaxLowPriorityTest.stillRejectsAMaxSizeBelowOne
+- ProcessingConfigLowPriorityCapTest.sorterBeanCapsLowRequestsAtTheConfiguredMaxLowPriority
+- ProcessingConfigLowPriorityCapTest.sorterBeanReportsLowRequestsOverTheConfiguredMaxLowPriority
+- ProcessingConfigLowPriorityCapTest.sorterBeanAcceptsEveryLowRequestUnderTheDefaultCap
+- BatchObserverOverLowPriorityCapTest.registersOneRejectedCounterPerProblemCode
+- BatchObserverOverLowPriorityCapTest.reportsZeroCapProblemsBeforeAnyBatchIsObserved
+- BatchObserverOverLowPriorityCapTest.countsAnOverLowPriorityCapProblem
+
+# Final diff against main
+
+```diff
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java b/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
+index 665c676..a7dce3a 100644
+--- a/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
++++ b/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
+@@ -1,15 +1,32 @@
+ package com.tanya.workrequests.config;
+ 
+ import org.springframework.boot.context.properties.ConfigurationProperties;
++import org.springframework.boot.context.properties.bind.ConstructorBinding;
+ import org.springframework.boot.context.properties.bind.DefaultValue;
+ 
+ /** {@code app.batch.*}: guards that protect the service from oversized input. */
+ @ConfigurationProperties("app.batch")
+-public record BatchProperties(@DefaultValue("5000") int maxSize) {
++public record BatchProperties(@DefaultValue("5000") int maxSize,
++                              @DefaultValue("1000") int maxLowPriority) {
+ 
++    static final int DEFAULT_MAX_LOW_PRIORITY = 1000;
++
++    // With a second (one-argument) constructor Spring can no longer deduce which constructor to
++    // bind, so the canonical one is marked explicitly.
++    @ConstructorBinding
+     public BatchProperties {
+         if (maxSize < 1) {
+             throw new IllegalArgumentException("app.batch.max-size must be at least 1, was " + maxSize);
+         }
++        // 0 is legal and means "accept no Low work at all"; only negatives are nonsense.
++        if (maxLowPriority < 0) {
++            throw new IllegalArgumentException(
++                    "app.batch.max-low-priority must be at least 0, was " + maxLowPriority);
++        }
++    }
++
++    /** Kept for callers that only set the size guard; they get the default Low cap. */
++    public BatchProperties(int maxSize) {
++        this(maxSize, DEFAULT_MAX_LOW_PRIORITY);
+     }
+ }
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+index 8454554..fad8143 100644
+--- a/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
++++ b/backend/src/main/java/com/tanya/workrequests/config/ProcessingConfig.java
+@@ -31,8 +31,8 @@ public class ProcessingConfig {
+     }
+ 
+     @Bean
+-    WorkRequestSorter workRequestSorter() {
+-        return new WorkRequestSorter();
++    WorkRequestSorter workRequestSorter(BatchProperties batchProperties) {
++        return new WorkRequestSorter(batchProperties.maxLowPriority());
+     }
+ 
+     @Bean
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+index bd200c2..92b3d0c 100644
+--- a/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/Problem.java
+@@ -70,6 +70,15 @@ public record Problem(int inputIndex,
+                 "Request id " + requestId + " is used by requests with different content");
+     }
+ 
++    /**
++     * A Low-priority request that did not fit the per-batch Low cap. Reported rather than
++     * dropped silently, so a caller can see exactly which work was deferred.
++     */
++    public static Problem overLowPriorityCap(int inputIndex, String requestId, int cap) {
++        return new Problem(inputIndex, requestId, ProblemCode.OVER_LOW_PRIORITY_CAP, null, null, null, null,
++                subject(requestId) + " exceeds the per-batch Low-priority cap of " + cap);
++    }
++
+     private static String subject(String requestId) {
+         return requestId == null ? "Request" : requestId;
+     }
+diff --git a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+index 682459a..74b71fe 100644
+--- a/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
++++ b/backend/src/main/java/com/tanya/workrequests/domain/ProblemCode.java
+@@ -5,5 +5,7 @@ public enum ProblemCode {
+     MISSING_FIELD,
+     INVALID_VALUE,
+     DUPLICATE,
+-    CONFLICTING_REQUEST_ID
++    CONFLICTING_REQUEST_ID,
++    // Appended last so existing ordinals (and anything persisted or asserted against them) stay put.
++    OVER_LOW_PRIORITY_CAP
+ }
+diff --git a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestSorter.java b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestSorter.java
+index 0cb533f..cfc4876 100644
+--- a/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestSorter.java
++++ b/backend/src/main/java/com/tanya/workrequests/processing/WorkRequestSorter.java
+@@ -1,30 +1,93 @@
+ package com.tanya.workrequests.processing;
+ 
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
+ import com.tanya.workrequests.domain.StageTrace;
+ import com.tanya.workrequests.domain.WorkRequest;
+ 
++import java.util.ArrayList;
+ import java.util.Comparator;
+ import java.util.List;
+ 
+ /**
+  * Orders the queue: highest priority first, then oldest request, then requestId. The final
+  * requestId tiebreaker makes the order total, so output never depends on input order.
++ *
++ * <p>Optionally caps how many {@link Priority#LOW} requests one batch may accept. The cap is
++ * applied after sorting, so the Low requests that survive are the earliest ones (ties broken by
++ * requestId, exactly the order this stage already uses) and the rest become problems instead of
++ * disappearing. Priorities are read as they stand after deduplication, so an escalated duplicate
++ * is no longer Low and never counts against the cap.
+  */
+ public class WorkRequestSorter {
+ 
+     static final String STAGE = "prioritize";
+ 
++    /** Sentinel for "no cap configured": no realistic batch can hold this many Low requests. */
++    static final int NO_CAP = Integer.MAX_VALUE;
++
++    static final String SORT_NOTE =
++            "Sorted by priority (highest first), then requestedAt (earliest first), then requestId";
++
+     static final Comparator<WorkRequest> ORDER = Comparator
+             .comparingInt((WorkRequest request) -> request.priority().weight()).reversed()
+             .thenComparing(WorkRequest::requestedAt)
+             .thenComparing(WorkRequest::requestId);
+ 
++    private final int maxLowPriority;
++
++    /** No Low-priority cap; every request that reaches this stage is accepted. */
++    public WorkRequestSorter() {
++        this(NO_CAP);
++    }
++
++    public WorkRequestSorter(int maxLowPriority) {
++        if (maxLowPriority < 0) {
++            throw new IllegalArgumentException("maxLowPriority must be at least 0, was " + maxLowPriority);
++        }
++        this.maxLowPriority = maxLowPriority;
++    }
++
+     public StageResult sort(List<IndexedRequest> requests) {
+         List<IndexedRequest> sorted = requests.stream()
+                 .sorted(Comparator.comparing(IndexedRequest::request, ORDER))
+                 .toList();
+-        List<String> notes = List.of("Sorted by priority (highest first), then requestedAt (earliest first), then requestId");
+-        StageTrace trace = new StageTrace(STAGE, requests.size(), sorted.size(), notes);
+-        return new StageResult(sorted, List.of(), trace);
++
++        List<IndexedRequest> accepted = new ArrayList<>(sorted.size());
++        List<IndexedRequest> overCap = new ArrayList<>();
++        int lowAccepted = 0;
++        for (IndexedRequest indexed : sorted) {
++            if (indexed.request().priority() == Priority.LOW) {
++                if (lowAccepted >= maxLowPriority) {
++                    overCap.add(indexed);
++                    continue;
++                }
++                lowAccepted++;
++            }
++            accepted.add(indexed);
++        }
++
++        StageTrace trace = new StageTrace(STAGE, requests.size(), accepted.size(), notes(overCap));
++        return new StageResult(List.copyOf(accepted), problems(overCap), trace);
++    }
++
++    /** Problems are listed by input index so the stage's report reads in batch order. */
++    private List<Problem> problems(List<IndexedRequest> overCap) {
++        return overCap.stream()
++                .sorted(Comparator.comparingInt(IndexedRequest::inputIndex))
++                .map(indexed -> Problem.overLowPriorityCap(indexed.inputIndex(),
++                        indexed.request().requestId(), maxLowPriority))
++                .toList();
++    }
++
++    private List<String> notes(List<IndexedRequest> overCap) {
++        if (overCap.isEmpty()) {
++            return List.of(SORT_NOTE);
++        }
++        // Sorted text, no input indices, so the notes don't depend on input order.
++        return overCap.stream()
++                .map(indexed -> indexed.request().requestId() + " dropped: over Low-priority cap of " + maxLowPriority)
++                .sorted()
++                .toList();
+     }
+ }
+diff --git a/backend/src/test/java/com/tanya/workrequests/api/BatchObserverOverLowPriorityCapTest.java b/backend/src/test/java/com/tanya/workrequests/api/BatchObserverOverLowPriorityCapTest.java
+new file mode 100644
+index 0000000..c876843
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/api/BatchObserverOverLowPriorityCapTest.java
+@@ -0,0 +1,60 @@
++package com.tanya.workrequests.api;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.DescriptionNormalizer;
++import com.tanya.workrequests.processing.DuplicateResolver;
++import com.tanya.workrequests.processing.WorkRequestProcessor;
++import com.tanya.workrequests.processing.WorkRequestSorter;
++import com.tanya.workrequests.processing.WorkRequestValidator;
++import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
++import org.junit.jupiter.api.Test;
++
++import java.time.Instant;
++import java.util.Arrays;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/** The new ProblemCode must still get exactly one counter, like every other code. */
++class BatchObserverOverLowPriorityCapTest {
++
++    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
++    private final BatchObserver observer = new BatchObserver(registry);
++
++    @Test
++    void registersOneRejectedCounterPerProblemCode() {
++        assertThat(registry.find("workrequests.rejected").counters())
++                .extracting(counter -> counter.getId().getTag("code"))
++                .containsExactlyInAnyOrderElementsOf(
++                        Arrays.stream(ProblemCode.values()).map(Enum::name).toList());
++    }
++
++    @Test
++    void reportsZeroCapProblemsBeforeAnyBatchIsObserved() {
++        assertThat(countFor(ProblemCode.OVER_LOW_PRIORITY_CAP)).isZero();
++    }
++
++    @Test
++    void countsAnOverLowPriorityCapProblem() {
++        ProcessingResult result = cappedBatchResult();
++
++        observer.observe(1, () -> result);
++
++        assertThat(countFor(ProblemCode.OVER_LOW_PRIORITY_CAP)).isEqualTo(1.0);
++    }
++
++    private double countFor(ProblemCode code) {
++        return registry.get("workrequests.rejected").tag("code", code.name()).counter().count();
++    }
++
++    private static ProcessingResult cappedBatchResult() {
++        WorkRequestProcessor processor = new WorkRequestProcessor(new WorkRequestValidator(),
++                new DuplicateResolver(new DescriptionNormalizer()),
++                new WorkRequestSorter(0));
++        return processor.process(List.of(new WorkRequest("L-1", "EQ-1", Priority.LOW,
++                Instant.parse("2026-10-20T08:00:00Z"), "Low work")));
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/BatchPropertiesMaxLowPriorityTest.java b/backend/src/test/java/com/tanya/workrequests/config/BatchPropertiesMaxLowPriorityTest.java
+new file mode 100644
+index 0000000..3c773e7
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/BatchPropertiesMaxLowPriorityTest.java
+@@ -0,0 +1,87 @@
++package com.tanya.workrequests.config;
++
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.context.properties.bind.Binder;
++import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
++
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.assertj.core.api.Assertions.catchThrowable;
++
++/** app.batch.max-low-priority: default, bounds, and the old single-argument constructor. */
++class BatchPropertiesMaxLowPriorityTest {
++
++    @Test
++    void defaultsMaxLowPriorityToOneThousandWhenNotConfigured() {
++        assertThat(bind(Map.of()).maxLowPriority()).isEqualTo(1000);
++    }
++
++    @Test
++    void keepsTheMaxSizeDefaultOfFiveThousandWhenNotConfigured() {
++        assertThat(bind(Map.of()).maxSize()).isEqualTo(5000);
++    }
++
++    @Test
++    void bindsAConfiguredMaxLowPriority() {
++        assertThat(bind(Map.of("app.batch.max-low-priority", "25")).maxLowPriority()).isEqualTo(25);
++    }
++
++    @Test
++    void rejectsANegativeMaxLowPriorityWhenConstructed() {
++        assertThatThrownBy(() -> new BatchProperties(5000, -1))
++                .isInstanceOf(IllegalArgumentException.class)
++                .hasMessage("app.batch.max-low-priority must be at least 0, was -1");
++    }
++
++    @Test
++    void rejectsANegativeMaxLowPriorityWhenBound() {
++        Throwable thrown = catchThrowable(() -> bind(Map.of("app.batch.max-low-priority", "-1")));
++
++        assertThat(rootCauseOf(thrown))
++                .isInstanceOf(IllegalArgumentException.class)
++                .hasMessage("app.batch.max-low-priority must be at least 0, was -1");
++    }
++
++    @Test
++    void acceptsAMaxLowPriorityOfZero() {
++        assertThat(new BatchProperties(5000, 0).maxLowPriority()).isZero();
++    }
++
++    @Test
++    void acceptsAPositiveMaxLowPriority() {
++        assertThat(new BatchProperties(5000, 7).maxLowPriority()).isEqualTo(7);
++    }
++
++    @Test
++    void singleArgumentConstructorStillDefaultsMaxLowPriorityToOneThousand() {
++        assertThat(new BatchProperties(5000).maxLowPriority()).isEqualTo(1000);
++    }
++
++    @Test
++    void singleArgumentConstructorKeepsTheMaxSizeItIsGiven() {
++        assertThat(new BatchProperties(5000).maxSize()).isEqualTo(5000);
++    }
++
++    @Test
++    void stillRejectsAMaxSizeBelowOne() {
++        assertThatThrownBy(() -> new BatchProperties(0, 1000))
++                .isInstanceOf(IllegalArgumentException.class)
++                .hasMessage("app.batch.max-size must be at least 1, was 0");
++    }
++
++    private static BatchProperties bind(Map<String, Object> properties) {
++        return new Binder(new MapConfigurationPropertySource(properties))
++                .bindOrCreate("app.batch", BatchProperties.class);
++    }
++
++    /** The exception itself when it has no cause, so either way of failing is accepted. */
++    private static Throwable rootCauseOf(Throwable thrown) {
++        Throwable cause = thrown;
++        while (cause != null && cause.getCause() != null) {
++            cause = cause.getCause();
++        }
++        return cause;
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/config/ProcessingConfigLowPriorityCapTest.java b/backend/src/test/java/com/tanya/workrequests/config/ProcessingConfigLowPriorityCapTest.java
+new file mode 100644
+index 0000000..10a4507
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/config/ProcessingConfigLowPriorityCapTest.java
+@@ -0,0 +1,67 @@
++package com.tanya.workrequests.config;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.WorkRequest;
++import com.tanya.workrequests.processing.WorkRequestProcessor;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.test.context.runner.ApplicationContextRunner;
++
++import java.time.Instant;
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.tuple;
++
++/** ProcessingConfig must build the sorter bean with BatchProperties.maxLowPriority(). */
++class ProcessingConfigLowPriorityCapTest {
++
++    @Test
++    void sorterBeanCapsLowRequestsAtTheConfiguredMaxLowPriority() {
++        contextWith(new BatchProperties(5000, 2)).run(context -> {
++            ProcessingResult result = process(context.getBean(WorkRequestProcessor.class));
++
++            assertThat(result.accepted()).extracting(WorkRequest::requestId)
++                    .containsExactly("L-1", "L-2");
++        });
++    }
++
++    @Test
++    void sorterBeanReportsLowRequestsOverTheConfiguredMaxLowPriority() {
++        contextWith(new BatchProperties(5000, 2)).run(context -> {
++            ProcessingResult result = process(context.getBean(WorkRequestProcessor.class));
++
++            assertThat(result.problems()).extracting(Problem::requestId, Problem::code)
++                    .containsExactly(tuple("L-3", ProblemCode.OVER_LOW_PRIORITY_CAP));
++        });
++    }
++
++    @Test
++    void sorterBeanAcceptsEveryLowRequestUnderTheDefaultCap() {
++        contextWith(new BatchProperties(5000)).run(context -> {
++            ProcessingResult result = process(context.getBean(WorkRequestProcessor.class));
++
++            assertThat(result.accepted()).hasSize(3);
++        });
++    }
++
++    private static ApplicationContextRunner contextWith(BatchProperties properties) {
++        return new ApplicationContextRunner()
++                .withUserConfiguration(ProcessingConfig.class)
++                .withBean(BatchProperties.class, () -> properties);
++    }
++
++    private static ProcessingResult process(WorkRequestProcessor processor) {
++        return processor.process(List.of(
++                low("L-1", "2026-10-20T08:00:00Z"),
++                low("L-2", "2026-10-20T08:01:00Z"),
++                low("L-3", "2026-10-20T08:02:00Z")));
++    }
++
++    private static WorkRequest low(String requestId, String requestedAt) {
++        return new WorkRequest(requestId, "EQ-" + requestId, Priority.LOW,
++                Instant.parse(requestedAt), "Low work for " + requestId);
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/domain/OverLowPriorityCapProblemTest.java b/backend/src/test/java/com/tanya/workrequests/domain/OverLowPriorityCapProblemTest.java
+new file mode 100644
+index 0000000..b870806
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/domain/OverLowPriorityCapProblemTest.java
+@@ -0,0 +1,66 @@
++package com.tanya.workrequests.domain;
++
++import org.junit.jupiter.api.Test;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/**
++ * The problem reported for a Low-priority request that does not fit in the batch's cap.
++ */
++class OverLowPriorityCapProblemTest {
++
++    private static final Problem PROBLEM = Problem.overLowPriorityCap(4, "WR-9", 2);
++
++    @Test
++    void carriesTheInputIndexOfTheCappedRequest() {
++        assertThat(PROBLEM.inputIndex()).isEqualTo(4);
++    }
++
++    @Test
++    void carriesTheRequestIdOfTheCappedRequest() {
++        assertThat(PROBLEM.requestId()).isEqualTo("WR-9");
++    }
++
++    @Test
++    void usesTheOverLowPriorityCapCode() {
++        assertThat(PROBLEM.code()).isEqualTo(ProblemCode.OVER_LOW_PRIORITY_CAP);
++    }
++
++    @Test
++    void leavesFieldNullBecauseNoSingleFieldIsAtFault() {
++        assertThat(PROBLEM.field()).isNull();
++    }
++
++    @Test
++    void leavesRelatedRequestIdNullBecauseNoOtherRequestIsInvolved() {
++        assertThat(PROBLEM.relatedRequestId()).isNull();
++    }
++
++    @Test
++    void leavesTheEscalationFieldsNull() {
++        assertThat(PROBLEM.escalatedFrom()).isNull();
++        assertThat(PROBLEM.escalatedTo()).isNull();
++    }
++
++    @Test
++    void messageNamesTheRequestAndTheCapAndNeverTheInputIndex() {
++        assertThat(PROBLEM.message()).isEqualTo("WR-9 exceeds the per-batch Low-priority cap of 2");
++    }
++
++    @Test
++    void messageReportsTheCapItWasGiven() {
++        assertThat(Problem.overLowPriorityCap(0, "WR-1", 0).message())
++                .isEqualTo("WR-1 exceeds the per-batch Low-priority cap of 0");
++    }
++
++    @Test
++    void overLowPriorityCapIsAppendedLastSoExistingCodesKeepTheirOrder() {
++        assertThat(ProblemCode.values()).containsExactly(
++                ProblemCode.NULL_REQUEST,
++                ProblemCode.MISSING_FIELD,
++                ProblemCode.INVALID_VALUE,
++                ProblemCode.DUPLICATE,
++                ProblemCode.CONFLICTING_REQUEST_ID,
++                ProblemCode.OVER_LOW_PRIORITY_CAP);
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/LowPriorityCapTest.java b/backend/src/test/java/com/tanya/workrequests/processing/LowPriorityCapTest.java
+new file mode 100644
+index 0000000..6412d04
+--- /dev/null
++++ b/backend/src/test/java/com/tanya/workrequests/processing/LowPriorityCapTest.java
+@@ -0,0 +1,372 @@
++package com.tanya.workrequests.processing;
++
++import com.tanya.workrequests.domain.Priority;
++import com.tanya.workrequests.domain.Problem;
++import com.tanya.workrequests.domain.ProblemCode;
++import com.tanya.workrequests.domain.ProcessingResult;
++import com.tanya.workrequests.domain.StageTrace;
++import com.tanya.workrequests.domain.WorkRequest;
++import org.junit.jupiter.api.Test;
++
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++import java.util.Random;
++
++import static com.tanya.workrequests.processing.TestRequests.request;
++import static com.tanya.workrequests.processing.TestRequests.valid;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.tuple;
++
++/**
++ * The per-batch Low-priority cap, driven through the whole pipeline so the assertions
++ * depend on the published result rather than on where the cap is applied.
++ */
++class LowPriorityCapTest {
++
++    @Test
++    void keepsTheEarliestLowRequestsUpToTheCapAndEveryNonLowRequest() {
++        ProcessingResult result = processorWithCap(2).process(fiveLowAndThreeOtherRequests());
++
++        assertThat(result.accepted()).extracting(WorkRequest::requestId)
++                .containsExactly("C-1", "H-1", "M-1", "L-1", "L-2");
++    }
++
++    @Test
++    void reportsEveryLowRequestBeyondTheCapAsAProblem() {
++        ProcessingResult result = processorWithCap(2).process(fiveLowAndThreeOtherRequests());
++
++        assertThat(result.problems()).extracting(Problem::requestId, Problem::code)
++                .containsExactly(
++                        tuple("L-3", ProblemCode.OVER_LOW_PRIORITY_CAP),
++                        tuple("L-4", ProblemCode.OVER_LOW_PRIORITY_CAP),
++                        tuple("L-5", ProblemCode.OVER_LOW_PRIORITY_CAP));
++    }
++
++    @Test
++    void countsOnlyLowPriorityRequestsAgainstTheCap() {
++        List<WorkRequest> batch = List.of(
++                at("M-1", Priority.MEDIUM, "2026-10-20T08:00:00Z"),
++                at("M-2", Priority.MEDIUM, "2026-10-20T08:01:00Z"),
++                at("H-1", Priority.HIGH, "2026-10-20T08:02:00Z"),
++                low("L-1", "2026-10-20T08:03:00Z"));
++
++        ProcessingResult result = processorWithCap(1).process(batch);
++
++        assertThat(result.accepted()).extracting(WorkRequest::requestId)
++                .containsExactly("H-1", "M-1", "M-2", "L-1");
++    }
++
++    @Test
++    void keepsTheLowestRequestIdWhenRequestedAtTies() {
++        ProcessingResult result = processorWithCap(1).process(tiedLowRequests());
++
++        assertThat(result.accepted()).extracting(WorkRequest::requestId).containsExactly("A-1");
++    }
++
++    @Test
++    void reportsTheHigherRequestIdOfATieAsOverCap() {
++        ProcessingResult result = processorWithCap(1).process(tiedLowRequests());
++
++        assertThat(overCapIds(result)).containsExactly("B-2");
++    }
++
++    @Test
++    void acceptsTheSameQueueWhateverTheInputOrder() {
++        WorkRequestProcessor processor = processorWithCap(2);
++        List<WorkRequest> batch = fiveLowAndThreeOtherRequests();
++        List<WorkRequest> expected = processor.process(batch).accepted();
++        Random random = new Random(20261020L);
++
++        for (int run = 0; run < 100; run++) {
++            List<WorkRequest> shuffled = new ArrayList<>(batch);
++            Collections.shuffle(shuffled, random);
++
++            assertThat(processor.process(shuffled).accepted())
++                    .as("run %d", run)
++                    .containsExactlyElementsOf(expected);
++        }
++    }
++
++    @Test
++    void reportsTheSameOverCapRequestIdsWhateverTheInputOrder() {
++        WorkRequestProcessor processor = processorWithCap(2);
++        List<WorkRequest> batch = fiveLowAndThreeOtherRequests();
++        List<String> expected = overCapIds(processor.process(batch));
++        Random random = new Random(7L);
++
++        for (int run = 0; run < 100; run++) {
++            List<WorkRequest> shuffled = new ArrayList<>(batch);
++            Collections.shuffle(shuffled, random);
++
++            assertThat(overCapIds(processor.process(shuffled)))
++                    .as("run %d", run)
++                    .containsExactlyInAnyOrderElementsOf(expected);
++        }
++    }
++
++    @Test
++    void producesTheSameTraceWhateverTheInputOrder() {
++        WorkRequestProcessor processor = processorWithCap(2);
++        List<WorkRequest> batch = fiveLowAndThreeOtherRequests();
++        List<StageTrace> expected = processor.process(batch).trace();
++        Random random = new Random(99L);
++
++        for (int run = 0; run < 100; run++) {
++            List<WorkRequest> shuffled = new ArrayList<>(batch);
++            Collections.shuffle(shuffled, random);
++
++            assertThat(processor.process(shuffled).trace()).as("run %d", run).isEqualTo(expected);
++        }
++    }
++
++    @Test
++    void capOfZeroAcceptsOnlyRequestsThatAreNotLowPriority() {
++        ProcessingResult result = processorWithCap(0).process(twoLowRequestsAndAHighRequest());
++
++        assertThat(result.accepted()).extracting(WorkRequest::requestId).containsExactly("H-1");
++    }
++
++    @Test
++    void capOfZeroReportsEveryLowRequestAsOverCap() {
++        ProcessingResult result = processorWithCap(0).process(twoLowRequestsAndAHighRequest());
++
++        assertThat(result.problems()).extracting(Problem::requestId, Problem::code)
++                .containsExactly(
++                        tuple("L-1", ProblemCode.OVER_LOW_PRIORITY_CAP),
++                        tuple("L-2", ProblemCode.OVER_LOW_PRIORITY_CAP));
++    }
++
++    @Test
++    void acceptsADuplicateSurvivorEscalatedOutOfLowPriorityDespiteACapOfZero() {
++        ProcessingResult result = processorWithCap(0).process(escalatingDuplicates());
++
++        assertThat(result.accepted()).extracting(WorkRequest::requestId, WorkRequest::priority)
++                .containsExactly(tuple("D-1", Priority.MEDIUM));
++    }
++
++    @Test
++    void reportsNoCapProblemForADuplicateSurvivorEscalatedOutOfLowPriority() {
++        ProcessingResult result = processorWithCap(0).process(escalatingDuplicates());
++
++        assertThat(overCapIds(result)).isEmpty();
++    }
++
++    @Test
++    void listsCapProblemsAfterValidateAndDeduplicateProblemsOrderedByInputIndex() {
++        ProcessingResult result = processorWithCap(1).process(batchWithProblemsAtEveryStage());
++
++        assertThat(result.problems()).extracting(Problem::code, Problem::inputIndex)
++                .containsExactly(
++                        tuple(ProblemCode.NULL_REQUEST, 1),
++                        tuple(ProblemCode.DUPLICATE, 4),
++                        tuple(ProblemCode.OVER_LOW_PRIORITY_CAP, 3),
++                        tuple(ProblemCode.OVER_LOW_PRIORITY_CAP, 7));
++    }
++
++    @Test
++    void prioritizeTraceLosesOneRequestPerCappedRequest() {
++        StageTrace trace = prioritizeTrace(processorWithCap(1).process(batchWithProblemsAtEveryStage()));
++
++        assertThat(trace.out()).isEqualTo(trace.in() - 2);
++    }
++
++    @Test
++    void cappingStageIsTracedAsPrioritize() {
++        ProcessingResult result = processorWithCap(1).process(batchWithProblemsAtEveryStage());
++
++        assertThat(prioritizeTrace(result).stage()).isEqualTo("prioritize");
++    }
++
++    @Test
++    void prioritizeTraceNotesEachCappedRequestByIdWithoutItsInputIndex() {
++        StageTrace trace = prioritizeTrace(processorWithCap(1).process(batchWithProblemsAtEveryStage()));
++
++        assertThat(capNotes(trace)).containsExactly(
++                "L-2 dropped: over Low-priority cap of 1",
++                "L-3 dropped: over Low-priority cap of 1");
++    }
++
++    @Test
++    void prioritizeTraceNotesAreSortedNaturally() {
++        StageTrace trace = prioritizeTrace(processorWithCap(1).process(batchWithProblemsAtEveryStage()));
++
++        assertThat(trace.notes()).isSorted();
++    }
++
++    @Test
++    void cappedBatchStillTracesValidateDeduplicateAndPrioritize() {
++        ProcessingResult result = processorWithCap(1).process(batchWithProblemsAtEveryStage());
++
++        assertThat(result.trace()).extracting(StageTrace::stage)
++                .containsExactly("validate", "deduplicate", "prioritize");
++    }
++
++    @Test
++    void reportsNoCapProblemWhenEveryLowRequestFitsWithinTheCap() {
++        ProcessingResult result = processorWithCap(2).process(twoLowRequestsAndAHighRequest());
++
++        assertThat(result.problems()).isEmpty();
++    }
++
++    @Test
++    void prioritizeTraceKeepsEveryRequestWhenNothingIsCapped() {
++        StageTrace trace = prioritizeTrace(processorWithCap(2).process(twoLowRequestsAndAHighRequest()));
++
++        assertThat(trace.out()).isEqualTo(trace.in());
++    }
++
++    @Test
++    void prioritizeTraceHasNoCapNoteWhenNothingIsCapped() {
++        StageTrace trace = prioritizeTrace(processorWithCap(2).process(twoLowRequestsAndAHighRequest()));
++
++        assertThat(capNotes(trace)).isEmpty();
++    }
++
++    @Test
++    void emptyBatchProducesNoCapProblem() {
++        ProcessingResult result = processorWithCap(0).process(List.of());
++
++        assertThat(overCapIds(result)).isEmpty();
++    }
++
++    @Test
++    void emptyBatchTracesAPrioritizeStageWithEqualInAndOut() {
++        StageTrace trace = prioritizeTrace(processorWithCap(0).process(List.of()));
++
++        assertThat(trace.out()).isEqualTo(trace.in());
++    }
++
++    @Test
++    void emptyBatchStillTracesValidateDeduplicateAndPrioritize() {
++        ProcessingResult result = processorWithCap(0).process(List.of());
++
++        assertThat(result.trace()).extracting(StageTrace::stage)
++                .containsExactly("validate", "deduplicate", "prioritize");
++    }
++
++    @Test
++    void nullBatchProducesNoCapProblem() {
++        List<WorkRequest> batch = null;
++
++        assertThat(overCapIds(processorWithCap(0).process(batch))).isEmpty();
++    }
++
++    @Test
++    void nullBatchTracesAPrioritizeStageWithEqualInAndOut() {
++        List<WorkRequest> batch = null;
++
++        StageTrace trace = prioritizeTrace(processorWithCap(0).process(batch));
++
++        assertThat(trace.out()).isEqualTo(trace.in());
++    }
++
++    @Test
++    void nullBatchStillTracesValidateDeduplicateAndPrioritize() {
++        List<WorkRequest> batch = null;
++
++        ProcessingResult result = processorWithCap(0).process(batch);
++
++        assertThat(result.trace()).extracting(StageTrace::stage)
++                .containsExactly("validate", "deduplicate", "prioritize");
++    }
++
++    @Test
++    void sorterBuiltWithoutACapAcceptsEveryLowRequest() {
++        ProcessingResult result = processorWithoutCap().process(fiveLowAndThreeOtherRequests());
++
++        assertThat(result.accepted()).hasSize(8);
++    }
++
++    @Test
++    void sorterBuiltWithoutACapReportsNoProblems() {
++        ProcessingResult result = processorWithoutCap().process(fiveLowAndThreeOtherRequests());
++
++        assertThat(result.problems()).isEmpty();
++    }
++
++    private static WorkRequestProcessor processorWithCap(int maxLowPriority) {
++        return new WorkRequestProcessor(new WorkRequestValidator(),
++                new DuplicateResolver(new DescriptionNormalizer()),
++                new WorkRequestSorter(maxLowPriority));
++    }
++
++    /** The pre-existing constructors, which must keep working and apply no cap. */
++    private static WorkRequestProcessor processorWithoutCap() {
++        return new WorkRequestProcessor(new WorkRequestValidator(),
++                new DuplicateResolver(new DescriptionNormalizer()),
++                new WorkRequestSorter());
++    }
++
++    private static List<WorkRequest> fiveLowAndThreeOtherRequests() {
++        return List.of(
++                low("L-1", "2026-10-20T08:00:00Z"),
++                low("L-2", "2026-10-20T08:01:00Z"),
++                low("L-3", "2026-10-20T08:02:00Z"),
++                low("L-4", "2026-10-20T08:03:00Z"),
++                low("L-5", "2026-10-20T08:04:00Z"),
++                at("M-1", Priority.MEDIUM, "2026-10-20T09:00:00Z"),
++                at("H-1", Priority.HIGH, "2026-10-20T09:00:00Z"),
++                at("C-1", Priority.CRITICAL, "2026-10-20T09:00:00Z"));
++    }
++
++    private static List<WorkRequest> twoLowRequestsAndAHighRequest() {
++        return List.of(
++                low("L-1", "2026-10-20T08:00:00Z"),
++                low("L-2", "2026-10-20T08:01:00Z"),
++                at("H-1", Priority.HIGH, "2026-10-20T08:02:00Z"));
++    }
++
++    private static List<WorkRequest> tiedLowRequests() {
++        return List.of(
++                low("B-2", "2026-10-20T08:00:00Z"),
++                low("A-1", "2026-10-20T08:00:00Z"));
++    }
++
++    /** Duplicates whose group's highest priority is MEDIUM, so the survivor leaves LOW. */
++    private static List<WorkRequest> escalatingDuplicates() {
++        return List.of(
++                request("D-1", "EQ-7", Priority.LOW, "2026-10-20T08:00:00Z", "Pump leak"),
++                request("D-2", "EQ-7", Priority.MEDIUM, "2026-10-20T09:00:00Z", "Pump leak"));
++    }
++
++    /** One validation problem, one duplicate, and two Low requests over a cap of 1. */
++    private static List<WorkRequest> batchWithProblemsAtEveryStage() {
++        return Arrays.asList(
++                valid("V-0"),
++                null,
++                request("D-1", "EQ-D", Priority.HIGH, "2026-10-20T08:00:00Z", "Shared work"),
++                low("L-3", "2026-10-20T09:00:00Z"),
++                request("D-2", "EQ-D", Priority.HIGH, "2026-10-20T08:30:00Z", "Shared work"),
++                low("L-1", "2026-10-20T07:00:00Z"),
++                valid("V-6"),
++                low("L-2", "2026-10-20T10:00:00Z"));
++    }
++
++    private static WorkRequest low(String requestId, String requestedAt) {
++        return request(requestId, "EQ-" + requestId, Priority.LOW, requestedAt, "Low work for " + requestId);
++    }
++
++    private static WorkRequest at(String requestId, Priority priority, String requestedAt) {
++        return request(requestId, "EQ-" + requestId, priority, requestedAt, "Work for " + requestId);
++    }
++
++    private static StageTrace prioritizeTrace(ProcessingResult result) {
++        return result.trace().stream()
++                .filter(trace -> "prioritize".equals(trace.stage()))
++                .findFirst()
++                .orElseThrow();
++    }
++
++    private static List<String> overCapIds(ProcessingResult result) {
++        return result.problems().stream()
++                .filter(problem -> problem.code() == ProblemCode.OVER_LOW_PRIORITY_CAP)
++                .map(Problem::requestId)
++                .toList();
++    }
++
++    private static List<String> capNotes(StageTrace trace) {
++        return trace.notes().stream().filter(note -> note.contains("cap")).toList();
++    }
++}
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java b/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
+index 91b168f..4d60fcd 100644
+--- a/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
++++ b/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
+@@ -33,12 +33,19 @@ class OrderIndependenceTest {
+     private static final long GENERATOR_SEED = 2026;
+     private static final Instant START = Instant.parse("2026-10-20T00:00:00Z");
+     private static final Priority[] PRIORITIES = Priority.values();
++    /** A tight Low cap, so the generated batch also produces an over-cap problem. */
++    private static final int LOW_CAP = 1;
+ 
+     private final WorkRequestProcessor processor = new WorkRequestProcessor(
+             new WorkRequestValidator(),
+             new DuplicateResolver(new DescriptionNormalizer()),
+             new WorkRequestSorter());
+ 
++    private final WorkRequestProcessor cappedProcessor = new WorkRequestProcessor(
++            new WorkRequestValidator(),
++            new DuplicateResolver(new DescriptionNormalizer()),
++            new WorkRequestSorter(LOW_CAP));
++
+     @Test
+     void producesIdenticalOutputAcross100Shuffles() {
+         assertSameOutputAcrossShuffles(SampleBatch.load(), 100, batch -> processor.process(batch));
+@@ -53,7 +60,8 @@ class OrderIndependenceTest {
+     void generatedBatchCoversEveryKindOfProblem() {
+         List<Element> batch = generatedBatch();
+ 
+-        ProcessingResult result = processElements(batch);
++        // A Low cap is the only way to reach OVER_LOW_PRIORITY_CAP, so this batch is capped.
++        ProcessingResult result = processElements(batch, cappedProcessor);
+ 
+         assertThat(batch).hasSize(200);
+         assertThat(result.problems()).extracting(Problem::code).contains(ProblemCode.values());
+@@ -177,6 +185,10 @@ class OrderIndependenceTest {
+     }
+ 
+     private ProcessingResult processElements(List<Element> elements) {
++        return processElements(elements, processor);
++    }
++
++    private ProcessingResult processElements(List<Element> elements, WorkRequestProcessor processor) {
+         Map<Integer, List<InvalidField>> invalidFields = new HashMap<>();
+         for (int index = 0; index < elements.size(); index++) {
+             if (!elements.get(index).invalidFields().isEmpty()) {
+
+```
+
+
+## Output schema
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "markdown"
+  ],
+  "properties": {
+    "markdown": {
+      "type": "string"
+    }
+  }
+}
+```

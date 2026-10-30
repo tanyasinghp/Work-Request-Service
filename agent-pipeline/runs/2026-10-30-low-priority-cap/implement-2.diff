@@ -1,0 +1,79 @@
+diff --git a/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java b/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
+--- a/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
++++ b/backend/src/main/java/com/tanya/workrequests/config/BatchProperties.java
+@@ -1,15 +1,19 @@
+ package com.tanya.workrequests.config;
+ 
+ import org.springframework.boot.context.properties.ConfigurationProperties;
++import org.springframework.boot.context.properties.bind.ConstructorBinding;
+ import org.springframework.boot.context.properties.bind.DefaultValue;
+ 
+ /** {@code app.batch.*}: guards that protect the service from oversized input. */
+ @ConfigurationProperties("app.batch")
+ public record BatchProperties(@DefaultValue("5000") int maxSize,
+                               @DefaultValue("1000") int maxLowPriority) {
+ 
+     static final int DEFAULT_MAX_LOW_PRIORITY = 1000;
+ 
++    // With a second (one-argument) constructor Spring can no longer deduce which constructor to
++    // bind, so the canonical one is marked explicitly.
++    @ConstructorBinding
+     public BatchProperties {
+         if (maxSize < 1) {
+             throw new IllegalArgumentException("app.batch.max-size must be at least 1, was " + maxSize);
+diff --git a/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java b/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
+--- a/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
++++ b/backend/src/test/java/com/tanya/workrequests/processing/OrderIndependenceTest.java
+@@ -29,17 +29,24 @@
+  */
+ class OrderIndependenceTest {
+ 
+     private static final long SHUFFLE_SEED = 42;
+     private static final long GENERATOR_SEED = 2026;
+     private static final Instant START = Instant.parse("2026-10-20T00:00:00Z");
+     private static final Priority[] PRIORITIES = Priority.values();
++    /** A tight Low cap, so the generated batch also produces an over-cap problem. */
++    private static final int LOW_CAP = 1;
+ 
+     private final WorkRequestProcessor processor = new WorkRequestProcessor(
+             new WorkRequestValidator(),
+             new DuplicateResolver(new DescriptionNormalizer()),
+             new WorkRequestSorter());
+ 
++    private final WorkRequestProcessor cappedProcessor = new WorkRequestProcessor(
++            new WorkRequestValidator(),
++            new DuplicateResolver(new DescriptionNormalizer()),
++            new WorkRequestSorter(LOW_CAP));
++
+     @Test
+     void producesIdenticalOutputAcross100Shuffles() {
+         assertSameOutputAcrossShuffles(SampleBatch.load(), 100, batch -> processor.process(batch));
+     }
+@@ -49,11 +56,12 @@
+         assertSameOutputAcrossShuffles(generatedBatch(), 50, this::processElements);
+     }
+ 
+     @Test
+     void generatedBatchCoversEveryKindOfProblem() {
+         List<Element> batch = generatedBatch();
+ 
+-        ProcessingResult result = processElements(batch);
++        // A Low cap is the only way to reach OVER_LOW_PRIORITY_CAP, so this batch is capped.
++        ProcessingResult result = processElements(batch, cappedProcessor);
+ 
+         assertThat(batch).hasSize(200);
+         assertThat(result.problems()).extracting(Problem::code).contains(ProblemCode.values());
+@@ -175,9 +183,13 @@
+     /** One input element and the fields the mapper found unreadable, so a shuffle moves both together. */
+     private record Element(WorkRequest request, List<InvalidField> invalidFields) {
+     }
+ 
+     private ProcessingResult processElements(List<Element> elements) {
++        return processElements(elements, processor);
++    }
++
++    private ProcessingResult processElements(List<Element> elements, WorkRequestProcessor processor) {
+         Map<Integer, List<InvalidField>> invalidFields = new HashMap<>();
+         for (int index = 0; index < elements.size(); index++) {
+             if (!elements.get(index).invalidFields().isEmpty()) {
+                 invalidFields.put(index, elements.get(index).invalidFields());

@@ -1,0 +1,290 @@
+{
+  "model": "claude-opus-5",
+  "costUsd": 0.32232000000000005,
+  "text": "{\"criteria\":[{\"given\":\"a batch whose requests all pass validation and deduplication, containing 5 LOW requests, and a configured cap of 2\",\"when\":\"WorkRequestProcessor.process(batch) runs\",\"then\":\"the accepted queue contains exactly 2 LOW requests plus every non-LOW request, and exactly 3 problems with code ProblemCode.OVER_LOW_PRIORITY_CAP are reported \u2014 nothing is silently dropped\"},{\"given\":\"LOW requests L1..L5 with distinct requestedAt instants and a cap of 2\",\"when\":\"the prioritize stage applies the cap\",\"then\":\"the kept LOW requests are the 2 with the earliest requestedAt; the other 3 are reported as problems, and this holds for all 100 shuffles of the same batch (the kept set of requestIds is identical every time)\"},{\"given\":\"more LOW requests than the cap where several share the same requestedAt (e.g. cap 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z)\",\"when\":\"the cap is applied\",\"then\":\"the tie is broken by requestId ascending, so 'A-1' is kept and 'B-2' is reported over cap \u2014 the same comparator the sorter already uses (priority weight desc, requestedAt asc, requestId asc)\"},{\"given\":\"a cap of 1 and a batch with 1 LOW, 3 MEDIUM, 2 HIGH and 2 CRITICAL requests\",\"when\":\"the batch is processed\",\"then\":\"no problem is produced and all 8 requests are accepted: only Priority.LOW counts against the cap and non-LOW requests are never capped, however many there are\"},{\"given\":\"two duplicate requests whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM, and a cap of 0\",\"when\":\"the batch is processed\",\"then\":\"the escalated request is not counted as LOW and is accepted; the priority used for the cap is the priority as it stands after the deduplicate stage\"},{\"given\":\"a configured cap of 0 and a batch of 2 LOW and 1 HIGH request\",\"when\":\"the batch is processed\",\"then\":\"the accepted queue contains only the HIGH request and both LOW requests are reported with ProblemCode.OVER_LOW_PRIORITY_CAP \u2014 a cap of 0 is a legal configuration meaning 'no Low work accepted'\"},{\"given\":\"a LOW request with requestId 'WR-9' at input index 4 that is over a cap of 2\",\"when\":\"the problem for it is created via Problem.overLowPriorityCap(4, \\\"WR-9\\\", 2)\",\"then\":\"the Problem has inputIndex 4, requestId 'WR-9', code ProblemCode.OVER_LOW_PRIORITY_CAP, null field, null relatedRequestId, null escalatedFrom and escalatedTo, and message exactly \\\"WR-9 exceeds the per-batch Low-priority cap of 2\\\" (the message names the request id and never the input index)\"},{\"given\":\"a batch that also produces validation and duplicate problems plus 2 over-cap LOW requests at input indices 7 and 3\",\"when\":\"the processing result's problems are read\",\"then\":\"problems appear in stage order (validate, then deduplicate, then prioritize) and, within the prioritize stage, by input index ascending \u2014 so the index-3 over-cap problem precedes the index-7 one\"},{\"given\":\"a cap of 1 and LOW requests 'L-2' and 'L-3' reported over cap\",\"when\":\"the prioritize StageTrace is read\",\"then\":\"its stage is \\\"prioritize\\\", in is the number of requests received by the stage, out is the number kept (in minus 2), and its notes are one note per over-cap request of the form \\\"L-2 dropped: over Low-priority cap of 1\\\", sorted in natural order and containing no input indices\"},{\"given\":\"a batch with no LOW request over the cap (including an empty batch and a null batch)\",\"when\":\"the batch is processed\",\"then\":\"no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize\"},{\"given\":\"an application context with no app.batch.max-low-priority set in configuration\",\"when\":\"BatchProperties is bound from app.batch.*\",\"then\":\"maxLowPriority() is 1000 (via @DefaultValue(\\\"1000\\\") on the new second record component) and maxSize() keeps its 5000 default; the WorkRequestSorter bean in ProcessingConfig is constructed with BatchProperties.maxLowPriority()\"},{\"given\":\"configuration app.batch.max-low-priority = -1\",\"when\":\"the properties are bound or BatchProperties is constructed directly\",\"then\":\"an IllegalArgumentException is thrown with message \\\"app.batch.max-low-priority must be at least 0, was -1\\\"; 0 and any positive value are accepted\"},{\"given\":\"existing code and tests that call new BatchProperties(5000), new WorkRequestSorter(), and new WorkRequestProcessor(validator, resolver, sorter)\",\"when\":\"those are compiled and run after the change\",\"then\":\"they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, and the no-arg WorkRequestSorter() applies no cap (unlimited); the capped behaviour is reached only through new WorkRequestSorter(int maxLowPriority)\"},{\"given\":\"the default configuration and the 13-request sample batch in sample-batch.json\",\"when\":\"the sample batch is processed\",\"then\":\"the accepted queue, problems and trace counts (13 \u2192 10 \u2192 6) are unchanged, because the default cap of 1000 exceeds the number of LOW requests in it\"},{\"given\":\"a batch generated to cover every problem kind, now including over-cap LOW requests, processed with a cap small enough to be exceeded\",\"when\":\"the result's problems are inspected and BatchObserver records the batch\",\"then\":\"every ProblemCode value \u2014 including OVER_LOW_PRIORITY_CAP, appended last in the enum \u2014 appears at least once, and BatchObserver increments one counter per ProblemCode value with no hard-coded code list left behind\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestSorter\",\"BatchProperties\",\"ProcessingConfig\",\"BatchObserver\",\"WorkRequestSorterTest\",\"BatchPropertiesTest\",\"OrderIndependenceTest\",\"WorkRequestProcessorTest\"],\"outOfScope\":[\"Caps for MEDIUM, HIGH or CRITICAL priorities, or a cap on total accepted requests (app.batch.max-size already guards batch size)\",\"Per-sender, per-equipment or per-time-window fairness quotas \u2014 the cap is per batch and global to the batch\",\"Adding a fourth pipeline stage or a fourth StageTrace entry; the trace stays validate, deduplicate, prioritize\",\"Rejecting or failing the whole batch (HTTP error, InvalidBatchException) when the cap is exceeded\",\"Introducing a java.time.Clock bean or any time-based staleness rule\",\"Changing the sorter's ordering rules, the duplicate/escalation rules, or validation\",\"Runtime/per-request override of the cap via API parameter, header or request body field\",\"New DTO fields or response shape changes; the new code travels through the existing ProblemDto.code string\",\"Editing sample-batch.json or re-pinning SampleBatchTest expectations\"],\"title\":\"Cap Low-priority requests per batch in the prioritize stage\"}",
+  "data": {
+    "criteria": [
+      {
+        "given": "a batch whose requests all pass validation and deduplication, containing 5 LOW requests, and a configured cap of 2",
+        "when": "WorkRequestProcessor.process(batch) runs",
+        "then": "the accepted queue contains exactly 2 LOW requests plus every non-LOW request, and exactly 3 problems with code ProblemCode.OVER_LOW_PRIORITY_CAP are reported \u2014 nothing is silently dropped"
+      },
+      {
+        "given": "LOW requests L1..L5 with distinct requestedAt instants and a cap of 2",
+        "when": "the prioritize stage applies the cap",
+        "then": "the kept LOW requests are the 2 with the earliest requestedAt; the other 3 are reported as problems, and this holds for all 100 shuffles of the same batch (the kept set of requestIds is identical every time)"
+      },
+      {
+        "given": "more LOW requests than the cap where several share the same requestedAt (e.g. cap 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z)",
+        "when": "the cap is applied",
+        "then": "the tie is broken by requestId ascending, so 'A-1' is kept and 'B-2' is reported over cap \u2014 the same comparator the sorter already uses (priority weight desc, requestedAt asc, requestId asc)"
+      },
+      {
+        "given": "a cap of 1 and a batch with 1 LOW, 3 MEDIUM, 2 HIGH and 2 CRITICAL requests",
+        "when": "the batch is processed",
+        "then": "no problem is produced and all 8 requests are accepted: only Priority.LOW counts against the cap and non-LOW requests are never capped, however many there are"
+      },
+      {
+        "given": "two duplicate requests whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM, and a cap of 0",
+        "when": "the batch is processed",
+        "then": "the escalated request is not counted as LOW and is accepted; the priority used for the cap is the priority as it stands after the deduplicate stage"
+      },
+      {
+        "given": "a configured cap of 0 and a batch of 2 LOW and 1 HIGH request",
+        "when": "the batch is processed",
+        "then": "the accepted queue contains only the HIGH request and both LOW requests are reported with ProblemCode.OVER_LOW_PRIORITY_CAP \u2014 a cap of 0 is a legal configuration meaning 'no Low work accepted'"
+      },
+      {
+        "given": "a LOW request with requestId 'WR-9' at input index 4 that is over a cap of 2",
+        "when": "the problem for it is created via Problem.overLowPriorityCap(4, \"WR-9\", 2)",
+        "then": "the Problem has inputIndex 4, requestId 'WR-9', code ProblemCode.OVER_LOW_PRIORITY_CAP, null field, null relatedRequestId, null escalatedFrom and escalatedTo, and message exactly \"WR-9 exceeds the per-batch Low-priority cap of 2\" (the message names the request id and never the input index)"
+      },
+      {
+        "given": "a batch that also produces validation and duplicate problems plus 2 over-cap LOW requests at input indices 7 and 3",
+        "when": "the processing result's problems are read",
+        "then": "problems appear in stage order (validate, then deduplicate, then prioritize) and, within the prioritize stage, by input index ascending \u2014 so the index-3 over-cap problem precedes the index-7 one"
+      },
+      {
+        "given": "a cap of 1 and LOW requests 'L-2' and 'L-3' reported over cap",
+        "when": "the prioritize StageTrace is read",
+        "then": "its stage is \"prioritize\", in is the number of requests received by the stage, out is the number kept (in minus 2), and its notes are one note per over-cap request of the form \"L-2 dropped: over Low-priority cap of 1\", sorted in natural order and containing no input indices"
+      },
+      {
+        "given": "a batch with no LOW request over the cap (including an empty batch and a null batch)",
+        "when": "the batch is processed",
+        "then": "no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize"
+      },
+      {
+        "given": "an application context with no app.batch.max-low-priority set in configuration",
+        "when": "BatchProperties is bound from app.batch.*",
+        "then": "maxLowPriority() is 1000 (via @DefaultValue(\"1000\") on the new second record component) and maxSize() keeps its 5000 default; the WorkRequestSorter bean in ProcessingConfig is constructed with BatchProperties.maxLowPriority()"
+      },
+      {
+        "given": "configuration app.batch.max-low-priority = -1",
+        "when": "the properties are bound or BatchProperties is constructed directly",
+        "then": "an IllegalArgumentException is thrown with message \"app.batch.max-low-priority must be at least 0, was -1\"; 0 and any positive value are accepted"
+      },
+      {
+        "given": "existing code and tests that call new BatchProperties(5000), new WorkRequestSorter(), and new WorkRequestProcessor(validator, resolver, sorter)",
+        "when": "those are compiled and run after the change",
+        "then": "they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, and the no-arg WorkRequestSorter() applies no cap (unlimited); the capped behaviour is reached only through new WorkRequestSorter(int maxLowPriority)"
+      },
+      {
+        "given": "the default configuration and the 13-request sample batch in sample-batch.json",
+        "when": "the sample batch is processed",
+        "then": "the accepted queue, problems and trace counts (13 \u2192 10 \u2192 6) are unchanged, because the default cap of 1000 exceeds the number of LOW requests in it"
+      },
+      {
+        "given": "a batch generated to cover every problem kind, now including over-cap LOW requests, processed with a cap small enough to be exceeded",
+        "when": "the result's problems are inspected and BatchObserver records the batch",
+        "then": "every ProblemCode value \u2014 including OVER_LOW_PRIORITY_CAP, appended last in the enum \u2014 appears at least once, and BatchObserver increments one counter per ProblemCode value with no hard-coded code list left behind"
+      }
+    ],
+    "affectedClasses": [
+      "ProblemCode",
+      "Problem",
+      "WorkRequestSorter",
+      "BatchProperties",
+      "ProcessingConfig",
+      "BatchObserver",
+      "WorkRequestSorterTest",
+      "BatchPropertiesTest",
+      "OrderIndependenceTest",
+      "WorkRequestProcessorTest"
+    ],
+    "outOfScope": [
+      "Caps for MEDIUM, HIGH or CRITICAL priorities, or a cap on total accepted requests (app.batch.max-size already guards batch size)",
+      "Per-sender, per-equipment or per-time-window fairness quotas \u2014 the cap is per batch and global to the batch",
+      "Adding a fourth pipeline stage or a fourth StageTrace entry; the trace stays validate, deduplicate, prioritize",
+      "Rejecting or failing the whole batch (HTTP error, InvalidBatchException) when the cap is exceeded",
+      "Introducing a java.time.Clock bean or any time-based staleness rule",
+      "Changing the sorter's ordering rules, the duplicate/escalation rules, or validation",
+      "Runtime/per-request override of the cap via API parameter, header or request body field",
+      "New DTO fields or response shape changes; the new code travels through the existing ProblemDto.code string",
+      "Editing sample-batch.json or re-pinning SampleBatchTest expectations"
+    ],
+    "title": "Cap Low-priority requests per batch in the prioritize stage"
+  },
+  "raw": {
+    "is_error": false,
+    "duration_api_ms": 91336,
+    "num_turns": 2,
+    "stop_reason": "tool_use",
+    "session_id": "18969462-dd42-4eac-8ece-a8c194feb17e",
+    "total_cost_usd": 0.32232000000000005,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 13384,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 7236,
+      "output_tokens_details": {
+        "thinking_tokens": 4110
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 13384,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "global",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 7236,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 13384,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 13384
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 7495,
+        "outputTokens": 15,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 0,
+        "costUSD": 0.00757,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "canonicalModel": "claude-haiku-4-5",
+        "provider": "firstParty"
+      },
+      "claude-opus-5": {
+        "inputTokens": 2,
+        "outputTokens": 7236,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 13384,
+        "webSearchRequests": 0,
+        "costUSD": 0.31475000000000003,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 64000,
+        "canonicalModel": "claude-opus-5",
+        "provider": "firstParty"
+      }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "{\"criteria\":[{\"given\":\"a batch whose requests all pass validation and deduplication, containing 5 LOW requests, and a configured cap of 2\",\"when\":\"WorkRequestProcessor.process(batch) runs\",\"then\":\"the accepted queue contains exactly 2 LOW requests plus every non-LOW request, and exactly 3 problems with code ProblemCode.OVER_LOW_PRIORITY_CAP are reported \u2014 nothing is silently dropped\"},{\"given\":\"LOW requests L1..L5 with distinct requestedAt instants and a cap of 2\",\"when\":\"the prioritize stage applies the cap\",\"then\":\"the kept LOW requests are the 2 with the earliest requestedAt; the other 3 are reported as problems, and this holds for all 100 shuffles of the same batch (the kept set of requestIds is identical every time)\"},{\"given\":\"more LOW requests than the cap where several share the same requestedAt (e.g. cap 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z)\",\"when\":\"the cap is applied\",\"then\":\"the tie is broken by requestId ascending, so 'A-1' is kept and 'B-2' is reported over cap \u2014 the same comparator the sorter already uses (priority weight desc, requestedAt asc, requestId asc)\"},{\"given\":\"a cap of 1 and a batch with 1 LOW, 3 MEDIUM, 2 HIGH and 2 CRITICAL requests\",\"when\":\"the batch is processed\",\"then\":\"no problem is produced and all 8 requests are accepted: only Priority.LOW counts against the cap and non-LOW requests are never capped, however many there are\"},{\"given\":\"two duplicate requests whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM, and a cap of 0\",\"when\":\"the batch is processed\",\"then\":\"the escalated request is not counted as LOW and is accepted; the priority used for the cap is the priority as it stands after the deduplicate stage\"},{\"given\":\"a configured cap of 0 and a batch of 2 LOW and 1 HIGH request\",\"when\":\"the batch is processed\",\"then\":\"the accepted queue contains only the HIGH request and both LOW requests are reported with ProblemCode.OVER_LOW_PRIORITY_CAP \u2014 a cap of 0 is a legal configuration meaning 'no Low work accepted'\"},{\"given\":\"a LOW request with requestId 'WR-9' at input index 4 that is over a cap of 2\",\"when\":\"the problem for it is created via Problem.overLowPriorityCap(4, \\\"WR-9\\\", 2)\",\"then\":\"the Problem has inputIndex 4, requestId 'WR-9', code ProblemCode.OVER_LOW_PRIORITY_CAP, null field, null relatedRequestId, null escalatedFrom and escalatedTo, and message exactly \\\"WR-9 exceeds the per-batch Low-priority cap of 2\\\" (the message names the request id and never the input index)\"},{\"given\":\"a batch that also produces validation and duplicate problems plus 2 over-cap LOW requests at input indices 7 and 3\",\"when\":\"the processing result's problems are read\",\"then\":\"problems appear in stage order (validate, then deduplicate, then prioritize) and, within the prioritize stage, by input index ascending \u2014 so the index-3 over-cap problem precedes the index-7 one\"},{\"given\":\"a cap of 1 and LOW requests 'L-2' and 'L-3' reported over cap\",\"when\":\"the prioritize StageTrace is read\",\"then\":\"its stage is \\\"prioritize\\\", in is the number of requests received by the stage, out is the number kept (in minus 2), and its notes are one note per over-cap request of the form \\\"L-2 dropped: over Low-priority cap of 1\\\", sorted in natural order and containing no input indices\"},{\"given\":\"a batch with no LOW request over the cap (including an empty batch and a null batch)\",\"when\":\"the batch is processed\",\"then\":\"no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize\"},{\"given\":\"an application context with no app.batch.max-low-priority set in configuration\",\"when\":\"BatchProperties is bound from app.batch.*\",\"then\":\"maxLowPriority() is 1000 (via @DefaultValue(\\\"1000\\\") on the new second record component) and maxSize() keeps its 5000 default; the WorkRequestSorter bean in ProcessingConfig is constructed with BatchProperties.maxLowPriority()\"},{\"given\":\"configuration app.batch.max-low-priority = -1\",\"when\":\"the properties are bound or BatchProperties is constructed directly\",\"then\":\"an IllegalArgumentException is thrown with message \\\"app.batch.max-low-priority must be at least 0, was -1\\\"; 0 and any positive value are accepted\"},{\"given\":\"existing code and tests that call new BatchProperties(5000), new WorkRequestSorter(), and new WorkRequestProcessor(validator, resolver, sorter)\",\"when\":\"those are compiled and run after the change\",\"then\":\"they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, and the no-arg WorkRequestSorter() applies no cap (unlimited); the capped behaviour is reached only through new WorkRequestSorter(int maxLowPriority)\"},{\"given\":\"the default configuration and the 13-request sample batch in sample-batch.json\",\"when\":\"the sample batch is processed\",\"then\":\"the accepted queue, problems and trace counts (13 \u2192 10 \u2192 6) are unchanged, because the default cap of 1000 exceeds the number of LOW requests in it\"},{\"given\":\"a batch generated to cover every problem kind, now including over-cap LOW requests, processed with a cap small enough to be exceeded\",\"when\":\"the result's problems are inspected and BatchObserver records the batch\",\"then\":\"every ProblemCode value \u2014 including OVER_LOW_PRIORITY_CAP, appended last in the enum \u2014 appears at least once, and BatchObserver increments one counter per ProblemCode value with no hard-coded code list left behind\"}],\"affectedClasses\":[\"ProblemCode\",\"Problem\",\"WorkRequestSorter\",\"BatchProperties\",\"ProcessingConfig\",\"BatchObserver\",\"WorkRequestSorterTest\",\"BatchPropertiesTest\",\"OrderIndependenceTest\",\"WorkRequestProcessorTest\"],\"outOfScope\":[\"Caps for MEDIUM, HIGH or CRITICAL priorities, or a cap on total accepted requests (app.batch.max-size already guards batch size)\",\"Per-sender, per-equipment or per-time-window fairness quotas \u2014 the cap is per batch and global to the batch\",\"Adding a fourth pipeline stage or a fourth StageTrace entry; the trace stays validate, deduplicate, prioritize\",\"Rejecting or failing the whole batch (HTTP error, InvalidBatchException) when the cap is exceeded\",\"Introducing a java.time.Clock bean or any time-based staleness rule\",\"Changing the sorter's ordering rules, the duplicate/escalation rules, or validation\",\"Runtime/per-request override of the cap via API parameter, header or request body field\",\"New DTO fields or response shape changes; the new code travels through the existing ProblemDto.code string\",\"Editing sample-batch.json or re-pinning SampleBatchTest expectations\"],\"title\":\"Cap Low-priority requests per batch in the prioritize stage\"}",
+    "structured_output": {
+      "criteria": [
+        {
+          "given": "a batch whose requests all pass validation and deduplication, containing 5 LOW requests, and a configured cap of 2",
+          "when": "WorkRequestProcessor.process(batch) runs",
+          "then": "the accepted queue contains exactly 2 LOW requests plus every non-LOW request, and exactly 3 problems with code ProblemCode.OVER_LOW_PRIORITY_CAP are reported \u2014 nothing is silently dropped"
+        },
+        {
+          "given": "LOW requests L1..L5 with distinct requestedAt instants and a cap of 2",
+          "when": "the prioritize stage applies the cap",
+          "then": "the kept LOW requests are the 2 with the earliest requestedAt; the other 3 are reported as problems, and this holds for all 100 shuffles of the same batch (the kept set of requestIds is identical every time)"
+        },
+        {
+          "given": "more LOW requests than the cap where several share the same requestedAt (e.g. cap 1 and LOW requests 'B-2' and 'A-1' both at 2026-10-20T08:00:00Z)",
+          "when": "the cap is applied",
+          "then": "the tie is broken by requestId ascending, so 'A-1' is kept and 'B-2' is reported over cap \u2014 the same comparator the sorter already uses (priority weight desc, requestedAt asc, requestId asc)"
+        },
+        {
+          "given": "a cap of 1 and a batch with 1 LOW, 3 MEDIUM, 2 HIGH and 2 CRITICAL requests",
+          "when": "the batch is processed",
+          "then": "no problem is produced and all 8 requests are accepted: only Priority.LOW counts against the cap and non-LOW requests are never capped, however many there are"
+        },
+        {
+          "given": "two duplicate requests whose group's highest priority is MEDIUM, so the kept request is escalated from LOW to MEDIUM, and a cap of 0",
+          "when": "the batch is processed",
+          "then": "the escalated request is not counted as LOW and is accepted; the priority used for the cap is the priority as it stands after the deduplicate stage"
+        },
+        {
+          "given": "a configured cap of 0 and a batch of 2 LOW and 1 HIGH request",
+          "when": "the batch is processed",
+          "then": "the accepted queue contains only the HIGH request and both LOW requests are reported with ProblemCode.OVER_LOW_PRIORITY_CAP \u2014 a cap of 0 is a legal configuration meaning 'no Low work accepted'"
+        },
+        {
+          "given": "a LOW request with requestId 'WR-9' at input index 4 that is over a cap of 2",
+          "when": "the problem for it is created via Problem.overLowPriorityCap(4, \"WR-9\", 2)",
+          "then": "the Problem has inputIndex 4, requestId 'WR-9', code ProblemCode.OVER_LOW_PRIORITY_CAP, null field, null relatedRequestId, null escalatedFrom and escalatedTo, and message exactly \"WR-9 exceeds the per-batch Low-priority cap of 2\" (the message names the request id and never the input index)"
+        },
+        {
+          "given": "a batch that also produces validation and duplicate problems plus 2 over-cap LOW requests at input indices 7 and 3",
+          "when": "the processing result's problems are read",
+          "then": "problems appear in stage order (validate, then deduplicate, then prioritize) and, within the prioritize stage, by input index ascending \u2014 so the index-3 over-cap problem precedes the index-7 one"
+        },
+        {
+          "given": "a cap of 1 and LOW requests 'L-2' and 'L-3' reported over cap",
+          "when": "the prioritize StageTrace is read",
+          "then": "its stage is \"prioritize\", in is the number of requests received by the stage, out is the number kept (in minus 2), and its notes are one note per over-cap request of the form \"L-2 dropped: over Low-priority cap of 1\", sorted in natural order and containing no input indices"
+        },
+        {
+          "given": "a batch with no LOW request over the cap (including an empty batch and a null batch)",
+          "when": "the batch is processed",
+          "then": "no OVER_LOW_PRIORITY_CAP problem is produced, the prioritize trace has in == out and no cap note, and the trace still has exactly three entries: validate, deduplicate, prioritize"
+        },
+        {
+          "given": "an application context with no app.batch.max-low-priority set in configuration",
+          "when": "BatchProperties is bound from app.batch.*",
+          "then": "maxLowPriority() is 1000 (via @DefaultValue(\"1000\") on the new second record component) and maxSize() keeps its 5000 default; the WorkRequestSorter bean in ProcessingConfig is constructed with BatchProperties.maxLowPriority()"
+        },
+        {
+          "given": "configuration app.batch.max-low-priority = -1",
+          "when": "the properties are bound or BatchProperties is constructed directly",
+          "then": "an IllegalArgumentException is thrown with message \"app.batch.max-low-priority must be at least 0, was -1\"; 0 and any positive value are accepted"
+        },
+        {
+          "given": "existing code and tests that call new BatchProperties(5000), new WorkRequestSorter(), and new WorkRequestProcessor(validator, resolver, sorter)",
+          "when": "those are compiled and run after the change",
+          "then": "they still compile and behave as before: BatchProperties(int maxSize) delegates to maxLowPriority 1000, and the no-arg WorkRequestSorter() applies no cap (unlimited); the capped behaviour is reached only through new WorkRequestSorter(int maxLowPriority)"
+        },
+        {
+          "given": "the default configuration and the 13-request sample batch in sample-batch.json",
+          "when": "the sample batch is processed",
+          "then": "the accepted queue, problems and trace counts (13 \u2192 10 \u2192 6) are unchanged, because the default cap of 1000 exceeds the number of LOW requests in it"
+        },
+        {
+          "given": "a batch generated to cover every problem kind, now including over-cap LOW requests, processed with a cap small enough to be exceeded",
+          "when": "the result's problems are inspected and BatchObserver records the batch",
+          "then": "every ProblemCode value \u2014 including OVER_LOW_PRIORITY_CAP, appended last in the enum \u2014 appears at least once, and BatchObserver increments one counter per ProblemCode value with no hard-coded code list left behind"
+        }
+      ],
+      "affectedClasses": [
+        "ProblemCode",
+        "Problem",
+        "WorkRequestSorter",
+        "BatchProperties",
+        "ProcessingConfig",
+        "BatchObserver",
+        "WorkRequestSorterTest",
+        "BatchPropertiesTest",
+        "OrderIndependenceTest",
+        "WorkRequestProcessorTest"
+      ],
+      "outOfScope": [
+        "Caps for MEDIUM, HIGH or CRITICAL priorities, or a cap on total accepted requests (app.batch.max-size already guards batch size)",
+        "Per-sender, per-equipment or per-time-window fairness quotas \u2014 the cap is per batch and global to the batch",
+        "Adding a fourth pipeline stage or a fourth StageTrace entry; the trace stays validate, deduplicate, prioritize",
+        "Rejecting or failing the whole batch (HTTP error, InvalidBatchException) when the cap is exceeded",
+        "Introducing a java.time.Clock bean or any time-based staleness rule",
+        "Changing the sorter's ordering rules, the duplicate/escalation rules, or validation",
+        "Runtime/per-request override of the cap via API parameter, header or request body field",
+        "New DTO fields or response shape changes; the new code travels through the existing ProblemDto.code string",
+        "Editing sample-batch.json or re-pinning SampleBatchTest expectations"
+      ],
+      "title": "Cap Low-priority requests per batch in the prioritize stage"
+    },
+    "ttft_ms": 54831,
+    "ttft_stream_ms": 1266,
+    "time_to_request_ms": 15,
+    "type": "result",
+    "duration_ms": 89704,
+    "uuid": "fbdac45d-3005-4617-9b02-e88e31300968"
+  }
+}
