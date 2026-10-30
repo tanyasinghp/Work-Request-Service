@@ -2,7 +2,9 @@ import { useState, type ReactNode } from 'react'
 import agentRunsJson from '../data/agentRuns.json'
 import { Hint, Panel } from '../components/ui'
 import { cx } from '../components/styles'
-import { AGENT_STAGES, parseAgentRuns, passedFirstTry, runOutcome, type AgentRun, type AgentStageId } from '../logic/agentRuns'
+import {
+  AGENT_STAGES, isPlaceholderData, parseAgentRuns, passedFirstTry, runOutcome, type AgentRun, type AgentStageId,
+} from '../logic/agentRuns'
 import { AgentFlow } from './AgentFlow'
 
 // Read once: the file is bundled at build time, and the pipeline replaces it between builds.
@@ -42,9 +44,12 @@ export function AgentRunsTab() {
           >
             <span className={cx('size-2 rounded-full', runOutcome(candidate) === 'passed' ? 'bg-emerald-500' : 'bg-rose-500')} />
             {candidate.title}
+            <span className={cx('text-[11px] font-normal', candidate.id === run.id ? 'text-slate-300' : 'text-slate-500')}>
+              {outcomeLabel(candidate)}
+            </span>
           </button>
         ))}
-        {run.placeholder && (
+        {isPlaceholderData(runs) && (
           <Banner tone="warning">Placeholder data. The agent pipeline will replace agentRuns.json with real runs.</Banner>
         )}
       </div>
@@ -59,11 +64,22 @@ export function AgentRunsTab() {
         </Panel>
         <Panel title="Run summary">
           <dl className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-3 gap-y-2 p-4 text-[13px]">
-            <Term label="Outcome">{runOutcome(run) === 'passed' ? 'Gate passed' : 'Stopped after two failures'}</Term>
+            <Term label="Outcome">{runOutcome(run) === 'passed' ? 'Gate passed' : `Stopped at ${run.stoppedAt ?? 'the gate'}`}</Term>
             <Term label="First-try pass">{passedFirstTry(run) ? 'Yes' : 'No'}</Term>
-            <Term label="Gate attempts">{run.gate.attempts.length}</Term>
-            <Term label="Diff size">{run.implement.attempts.map((attempt) => `${attempt.diffLines} lines`).join(' → ')}</Term>
-            <Term label="Manual fixes">{run.summary.manualFixes.length}</Term>
+            <Term label="Attempts">{run.implement.attempts.length}</Term>
+            <Term label="Diff size">
+              {run.implement.attempts.map((attempt) => `${attempt.diffLines} lines`).join(' → ') || '—'}
+            </Term>
+            <Term label="Manual fixes">
+              {run.summary.reviewed === false ? 'not reviewed yet' : run.summary.manualFixes.length}
+            </Term>
+            {run.branch && <Term label="Branch"><code className="font-mono text-[12px]">{run.branch}</code></Term>}
+            {run.llm?.backend && <Term label="LLM">{run.llm.backend} ({(run.llm.models ?? []).join(', ') || 'model unknown'})</Term>}
+            {run.durationSeconds != null && (
+              <Term label="Time">
+                {Math.round(run.durationSeconds / 60)} min{run.costUsd != null ? ` · $${run.costUsd.toFixed(2)}` : ''}
+              </Term>
+            )}
           </dl>
         </Panel>
       </div>
@@ -105,16 +121,35 @@ function StageDetail({ run, stage }: { run: AgentRun; stage: AgentStageId }) {
           {run.gate.attempts.map((attempt) => (
             <div key={attempt.attempt} className="space-y-1">
               <p className={attempt.passed ? 'text-emerald-700' : 'text-rose-700'}>
-                <b className="font-semibold">Attempt {attempt.attempt}:</b> {attempt.passed ? 'all tests green' : `failed — ${attempt.failingTest ?? 'unknown test'}`}
+                <b className="font-semibold">Attempt {attempt.attempt}:</b>{' '}
+                {attempt.passed ? 'all tests green'
+                  : attempt.rejectedBeforeGate ? `rejected before the gate — ${attempt.rejectedBeforeGate}`
+                    : `failed — ${attempt.failingTest ?? 'unknown test'}`}
               </p>
               {attempt.output && <pre className="overflow-x-auto rounded-md bg-slate-900 px-3 py-2 font-mono text-[12px] text-slate-100">{attempt.output}</pre>}
             </div>
           ))}
+          {run.gate.attempts.length === 0 && <p>This run stopped before the gate.</p>}
         </Body>
       )
     case 'summary':
-      return <Body><p>{run.summary.text}</p><List title="Fixed by hand" items={run.summary.manualFixes} /></Body>
+      return (
+        <Body>
+          {/* The PR description is Markdown; shown as written rather than rendered. */}
+          <p className="whitespace-pre-wrap">{run.summary.text}</p>
+          {run.summary.reviewed === false
+            ? <p className="text-slate-500">Not reviewed yet.</p>
+            : <List title="Manual fixes (from review)" items={run.summary.manualFixes.length > 0 ? run.summary.manualFixes : ['None needed.']} />}
+          <List title="Review notes" items={run.summary.reviewNotes ?? []} />
+        </Body>
+      )
   }
+}
+
+/** Short label that tells apart several runs of the same story. */
+function outcomeLabel(run: AgentRun): string {
+  if (runOutcome(run) === 'passed') return 'passed'
+  return run.stoppedAt ? `stopped at ${run.stoppedAt}` : 'stopped'
 }
 
 function Body({ children }: { children: ReactNode }) {

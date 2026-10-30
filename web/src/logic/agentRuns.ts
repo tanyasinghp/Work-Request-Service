@@ -1,6 +1,7 @@
 /**
- * Agent pipeline runs as exported to src/data/agentRuns.json. The pipeline overwrites that
- * file; this module checks its shape so a bad export fails loudly instead of half-rendering.
+ * Agent pipeline runs as exported to src/data/agentRuns.json by agent-pipeline/export_runs.py.
+ * The export overwrites that file; this module checks its shape so a bad export fails loudly
+ * instead of half-rendering.
  */
 
 export interface AcceptanceCriterion {
@@ -14,6 +15,8 @@ export interface GateAttempt {
   passed: boolean
   /** Set when the attempt failed: the first failing test, e.g. "DuplicateResolverTest.keepsEarliest". */
   failingTest?: string
+  /** Set when the diff never reached the gate: a guardrail rejected it or it didn't apply. */
+  rejectedBeforeGate?: string
   output?: string
 }
 
@@ -23,11 +26,23 @@ export interface AgentRun {
   placeholder?: boolean
   date: string
   story: string
+  outcome?: 'passed' | 'stopped' | 'error'
+  stoppedAt?: string | null
+  branch?: string | null
+  llm?: { backend?: string | null; models?: string[] }
+  durationSeconds?: number | null
+  costUsd?: number | null
   enrich: { criteria: AcceptanceCriterion[]; affectedClasses: string[]; outOfScope: string[] }
   implement: { attempts: { attempt: number; summary: string; diffLines: number }[] }
   writeTests: { testNames: string[] }
   gate: { attempts: GateAttempt[] }
-  summary: { text: string; manualFixes: string[] }
+  summary: {
+    text: string
+    manualFixes: string[]
+    /** False until a human has reviewed the agent branch; then manualFixes is the review's verdict. */
+    reviewed?: boolean
+    reviewNotes?: string[]
+  }
 }
 
 export type RunOutcome = 'passed' | 'stopped'
@@ -35,7 +50,7 @@ export type RunOutcome = 'passed' | 'stopped'
 export interface GateLoop {
   /** The failed attempt that sent the run back to Implement. */
   attempt: number
-  failingTest: string
+  label: string
 }
 
 export const AGENT_STAGES = [
@@ -61,25 +76,36 @@ export function parseAgentRuns(data: unknown): AgentRun[] {
     if (missing.length > 0) {
       throw new Error(`Run ${index} in agentRuns.json is missing: ${missing.join(', ')}`)
     }
-    if (!Array.isArray(candidate.gate?.attempts) || candidate.gate.attempts.length === 0) {
-      throw new Error(`Run ${index} in agentRuns.json has no gate attempts`)
+    if (!Array.isArray(candidate.gate?.attempts)) {
+      throw new Error(`Run ${index} in agentRuns.json has no gate attempts list`)
     }
   })
   return runs as AgentRun[]
 }
 
-/** A run passes when its last gate attempt passed; a second failure stops it. */
+/** A run passes when its last gate attempt passed. No attempts means it stopped earlier. */
 export function runOutcome(run: AgentRun): RunOutcome {
-  return run.gate.attempts[run.gate.attempts.length - 1].passed ? 'passed' : 'stopped'
+  const attempts = run.gate.attempts
+  return attempts.length > 0 && attempts[attempts.length - 1].passed ? 'passed' : 'stopped'
 }
 
 /** Each failed attempt that was followed by a retry draws a red edge back to Implement. */
 export function gateLoops(run: AgentRun): GateLoop[] {
   return run.gate.attempts
     .filter((attempt, index) => !attempt.passed && index < run.gate.attempts.length - 1)
-    .map((attempt) => ({ attempt: attempt.attempt, failingTest: attempt.failingTest ?? 'unknown test' }))
+    .map((attempt) => ({
+      attempt: attempt.attempt,
+      label: attempt.rejectedBeforeGate
+        ? `attempt ${attempt.attempt} rejected before the gate`
+        : `attempt ${attempt.attempt} failed: ${attempt.failingTest ?? 'unknown test'}`,
+    }))
 }
 
 export function passedFirstTry(run: AgentRun): boolean {
-  return run.gate.attempts[0].passed
+  return run.gate.attempts[0]?.passed ?? false
+}
+
+/** True only while the shipped file still holds the placeholder rather than real runs. */
+export function isPlaceholderData(runs: readonly AgentRun[]): boolean {
+  return runs.length > 0 && runs.every((run) => run.placeholder === true)
 }

@@ -12,26 +12,60 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
+/** The stage a stopped run stopped in, from the pipeline's stoppedAt (e.g. "implement-2"). */
+function stoppedStage(run: AgentRun): AgentStageId | null {
+  const at = run.stoppedAt ?? ''
+  if (at === 'enrich') return 'enrich'
+  if (at.startsWith('implement')) return 'implement'
+  if (at === 'write-tests') return 'writeTests'
+  if (at === 'gate' || at === 'branch-check') return 'gate'
+  return null
+}
+
+function reached(stage: AgentStageId, run: AgentRun): boolean {
+  switch (stage) {
+    case 'story':
+      return true
+    case 'enrich':
+      return run.enrich.criteria.length > 0 || stoppedStage(run) === 'enrich'
+    case 'implement':
+      return run.implement.attempts.length > 0
+    case 'writeTests':
+      return run.writeTests.testNames.length > 0 || stoppedStage(run) === 'writeTests'
+    case 'gate':
+      return run.gate.attempts.length > 0
+    case 'summary':
+      return runOutcome(run) === 'passed'
+  }
+}
+
 function describe(stage: AgentStageId, run: AgentRun): { subtitle: string; tone: AgentStageTone } {
-  const outcome = runOutcome(run)
+  if (!reached(stage, run)) {
+    return { subtitle: stage === 'summary' ? 'not produced' : 'not reached', tone: 'muted' }
+  }
+  const stopped = stoppedStage(run) === stage
   const attempts = run.gate.attempts
   switch (stage) {
     case 'story':
       return { subtitle: run.date, tone: 'neutral' }
     case 'enrich':
-      return { subtitle: `${run.enrich.criteria.length} ${run.enrich.criteria.length === 1 ? 'criterion' : 'criteria'}`, tone: 'neutral' }
+      return stopped
+        ? { subtitle: 'criteria rejected · stopped', tone: 'stopped' }
+        : { subtitle: `${run.enrich.criteria.length} ${run.enrich.criteria.length === 1 ? 'criterion' : 'criteria'}`,
+            tone: 'neutral' }
     case 'implement':
-      return { subtitle: plural(run.implement.attempts.length, 'attempt'), tone: 'neutral' }
+      return { subtitle: plural(run.implement.attempts.length, 'attempt') + (stopped ? ' · stopped' : ''),
+               tone: stopped ? 'stopped' : 'neutral' }
     case 'writeTests':
-      return { subtitle: plural(run.writeTests.testNames.length, 'test'), tone: 'neutral' }
+      return stopped
+        ? { subtitle: 'tests rejected · stopped', tone: 'stopped' }
+        : { subtitle: plural(run.writeTests.testNames.length, 'test'), tone: 'neutral' }
     case 'gate':
-      return outcome === 'passed'
+      return runOutcome(run) === 'passed'
         ? { subtitle: `passed on attempt ${attempts[attempts.length - 1].attempt}`, tone: 'passed' }
         : { subtitle: `failed ${attempts.length}× · stopped`, tone: 'stopped' }
     case 'summary':
-      return outcome === 'passed'
-        ? { subtitle: 'ready for review', tone: 'neutral' }
-        : { subtitle: 'not produced', tone: 'muted' }
+      return { subtitle: 'ready for review', tone: 'neutral' }
   }
 }
 
@@ -72,7 +106,7 @@ export function AgentFlow({ run, selectedStage, onSelectStage }: {
       type: 'smoothstep',
       animated: true,
       pathOptions: { offset: 36 + index * 18 },
-      label: `attempt ${loop.attempt} failed: ${loop.failingTest}`,
+      label: loop.label,
       labelStyle: { fill: FAILURE_RED, fontSize: 11, fontWeight: 600 },
       labelBgPadding: [6, 3] as [number, number],
       labelBgBorderRadius: 4,

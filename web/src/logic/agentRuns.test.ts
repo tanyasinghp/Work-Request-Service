@@ -1,24 +1,37 @@
 import { describe, expect, it } from 'vitest'
-import agentRunsJson from '../data/agentRuns.json'
-import { gateLoops, parseAgentRuns, passedFirstTry, runOutcome, type AgentRun } from './agentRuns'
+import shippedRuns from '../data/agentRuns.json'
+import {
+  gateLoops,
+  isPlaceholderData,
+  parseAgentRuns,
+  passedFirstTry,
+  runOutcome,
+  type AgentRun,
+} from './agentRuns'
+import placeholderRuns from './fixtures/placeholderRuns.json'
 
-const [placeholder] = parseAgentRuns(agentRunsJson)
+// The original placeholder, kept as a fixture: the shipped file now holds real runs.
+const [placeholder] = parseAgentRuns(placeholderRuns)
 
 function withGate(attempts: AgentRun['gate']['attempts']): AgentRun {
-  return { ...placeholder, gate: { attempts } }
+  return { ...placeholder, placeholder: undefined, gate: { attempts } }
 }
 
 describe('agent runs', () => {
-  it('ships one clearly labelled placeholder run', () => {
-    const runs = parseAgentRuns(agentRunsJson)
+  it('parses the shipped agentRuns.json, whatever runs it holds', () => {
+    expect(() => parseAgentRuns(shippedRuns)).not.toThrow()
+  })
 
-    expect(runs).toHaveLength(1)
-    expect(runs[0].placeholder).toBe(true)
-    expect(runs[0].title).toContain('PLACEHOLDER')
+  it('recognises the placeholder file, and only that, as placeholder data', () => {
+    expect(isPlaceholderData(parseAgentRuns(placeholderRuns))).toBe(true)
+    expect(isPlaceholderData([withGate([{ attempt: 1, passed: true }])])).toBe(false)
+    expect(isPlaceholderData([])).toBe(false)
   })
 
   it('draws a loop back to Implement for a failed attempt that was retried', () => {
-    expect(gateLoops(placeholder)).toEqual([{ attempt: 1, failingTest: 'Placeholder.existingTestBrokenByAttempt1' }])
+    expect(gateLoops(placeholder)).toEqual([
+      { attempt: 1, label: 'attempt 1 failed: Placeholder.existingTestBrokenByAttempt1' },
+    ])
     expect(runOutcome(placeholder)).toBe('passed')
     expect(passedFirstTry(placeholder)).toBe(false)
   })
@@ -37,12 +50,29 @@ describe('agent runs', () => {
     ])
 
     expect(runOutcome(run)).toBe('stopped')
-    expect(gateLoops(run)).toEqual([{ attempt: 1, failingTest: 'A.first' }])
+    expect(gateLoops(run)).toEqual([{ attempt: 1, label: 'attempt 1 failed: A.first' }])
+  })
+
+  it('labels a loop for an attempt the guardrails rejected before the gate', () => {
+    const run = withGate([
+      { attempt: 1, passed: false, rejectedBeforeGate: 'no file changes found in the diff' },
+      { attempt: 2, passed: false, failingTest: 'OrderIndependenceTest.covers' },
+    ])
+
+    expect(gateLoops(run)).toEqual([{ attempt: 1, label: 'attempt 1 rejected before the gate' }])
+  })
+
+  it('treats a run that never reached the gate as stopped', () => {
+    const run = withGate([])
+
+    expect(runOutcome(run)).toBe('stopped')
+    expect(passedFirstTry(run)).toBe(false)
+    expect(gateLoops(run)).toEqual([])
   })
 
   it('rejects an export with the wrong shape', () => {
     expect(() => parseAgentRuns([])).toThrow('"runs" array')
     expect(() => parseAgentRuns({ runs: [{ id: 'x' }] })).toThrow('missing: title, story')
-    expect(() => parseAgentRuns({ runs: [{ ...placeholder, gate: { attempts: [] } }] })).toThrow('no gate attempts')
+    expect(() => parseAgentRuns({ runs: [{ ...placeholder, gate: {} }] })).toThrow('no gate attempts list')
   })
 })
