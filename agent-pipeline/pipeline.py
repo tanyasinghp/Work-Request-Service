@@ -36,7 +36,8 @@ from stages import enrich, implement, summarize, write_tests
 from stages.common import StageFailed
 from stages.gate import run_gate
 
-COMMIT_TRAILER = "Generated-by: agent-pipeline\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+# Marks agent commits as generated, without adding a co-author to the project.
+COMMIT_TRAILER = "Generated-by: agent-pipeline"
 
 
 def load_story(argument: str) -> tuple[str, str, str]:
