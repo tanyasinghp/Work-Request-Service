@@ -33,22 +33,22 @@ class SampleBatchTest {
     void loadsThirteenRequestsFromJson() {
         assertThat(batch).hasSize(13);
         assertThat(batch.get(0)).isEqualTo(
-                request("REQ-101", "PUMP-7", MEDIUM, "2026-10-20T08:15:00Z", "Pump leaking"));
+                request("REQ-101", "AHU-3", MEDIUM, "2026-10-20T08:15:00Z", "Water leak above Ward 4B"));
         assertThat(batch.get(2).equipmentId()).isNull();
         assertThat(batch.get(4).requestedAt()).isNull();
         assertThat(batch.get(5).description()).isEqualTo("   ");
-        assertThat(batch.get(6).equipmentId()).isEqualTo(" pump-7 ");
+        assertThat(batch.get(6).equipmentId()).isEqualTo(" ahu-3 ");
     }
 
     @Test
     void processesSampleBatchIntoExpectedQueue() {
         assertThat(result.accepted()).containsExactly(
-                request("REQ-101", "PUMP-7", CRITICAL, "2026-10-20T08:15:00Z", "Pump leaking"),
-                request("REQ-102", "HVAC-2", HIGH, "2026-10-20T07:30:00Z", "Filter clogged"),
-                request("REQ-104", "ELEV-1", HIGH, "2026-10-20T07:30:00Z", "Door sensor fault"),
-                request("REQ-110", "DOOR-5", MEDIUM, "2026-10-20T08:00:00Z", "Lock jammed"),
-                request("REQ-111", "FAN-6", MEDIUM, "2026-10-20T13:00:00Z", "Belt squeal"),
-                request("REQ-112", "PARK-8", LOW, "2026-10-20T14:00:00Z", "Bench repainting"));
+                request("REQ-101", "AHU-3", CRITICAL, "2026-10-20T08:15:00Z", "Water leak above Ward 4B"),
+                request("REQ-102", "BOILER-1", HIGH, "2026-10-20T07:30:00Z", "Boiler pressure low in east wing"),
+                request("REQ-104", "ELEV-2", HIGH, "2026-10-20T07:30:00Z", "Elevator doors not closing on floor 3"),
+                request("REQ-110", "DOOR-5", MEDIUM, "2026-10-20T08:00:00Z", "Card reader failing at main entrance"),
+                request("REQ-111", "FUME-HOOD-4", MEDIUM, "2026-10-20T13:00:00Z", "Fume hood airflow alarm in chemistry lab"),
+                request("REQ-112", "BUS-14", LOW, "2026-10-20T14:00:00Z", "Torn seat on route 14 bus"));
     }
 
     @Test

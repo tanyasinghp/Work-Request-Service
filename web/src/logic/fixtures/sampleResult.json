@@ -2,45 +2,45 @@
   "accepted": [
     {
       "requestId": "REQ-101",
-      "equipmentId": "PUMP-7",
+      "equipmentId": "AHU-3",
       "priority": "CRITICAL",
       "requestedAt": "2026-10-20T08:15:00Z",
-      "description": "Pump leaking"
+      "description": "Water leak above Ward 4B"
     },
     {
       "requestId": "REQ-102",
-      "equipmentId": "HVAC-2",
+      "equipmentId": "BOILER-1",
       "priority": "HIGH",
       "requestedAt": "2026-10-20T07:30:00Z",
-      "description": "Filter clogged"
+      "description": "Boiler pressure low in east wing"
     },
     {
       "requestId": "REQ-104",
-      "equipmentId": "ELEV-1",
+      "equipmentId": "ELEV-2",
       "priority": "HIGH",
       "requestedAt": "2026-10-20T07:30:00Z",
-      "description": "Door sensor fault"
+      "description": "Elevator doors not closing on floor 3"
     },
     {
       "requestId": "REQ-110",
       "equipmentId": "DOOR-5",
       "priority": "MEDIUM",
       "requestedAt": "2026-10-20T08:00:00Z",
-      "description": "Lock jammed"
+      "description": "Card reader failing at main entrance"
     },
     {
       "requestId": "REQ-111",
-      "equipmentId": "FAN-6",
+      "equipmentId": "FUME-HOOD-4",
       "priority": "MEDIUM",
       "requestedAt": "2026-10-20T13:00:00Z",
-      "description": "Belt squeal"
+      "description": "Fume hood airflow alarm in chemistry lab"
     },
     {
       "requestId": "REQ-112",
-      "equipmentId": "PARK-8",
+      "equipmentId": "BUS-14",
       "priority": "LOW",
       "requestedAt": "2026-10-20T14:00:00Z",
-      "description": "Bench repainting"
+      "description": "Torn seat on route 14 bus"
     }
   ],
   "problems": [

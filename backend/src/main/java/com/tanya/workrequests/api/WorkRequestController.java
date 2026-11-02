@@ -29,12 +29,12 @@ public class WorkRequestController {
 
     static final String EXAMPLE_BATCH = """
             [
-              {"requestId": "REQ-1", "equipmentId": "PUMP-7", "priority": "MEDIUM",
-               "requestedAt": "2026-10-20T08:15:00Z", "description": "Pump leaking"},
-              {"requestId": "REQ-2", "equipmentId": " pump-7 ", "priority": "CRITICAL",
-               "requestedAt": "2026-10-20T11:05:00Z", "description": "pump  LEAKING"},
-              {"requestId": "REQ-3", "equipmentId": "FAN-6", "priority": "URGENT",
-               "requestedAt": "2026-10-20T13:00:00Z", "description": "Belt squeal"}
+              {"requestId": "REQ-1", "equipmentId": "AHU-3", "priority": "MEDIUM",
+               "requestedAt": "2026-10-20T08:15:00Z", "description": "Water leak above Ward 4B"},
+              {"requestId": "REQ-2", "equipmentId": " ahu-3 ", "priority": "CRITICAL",
+               "requestedAt": "2026-10-20T11:05:00Z", "description": "water leak  ABOVE ward 4b"},
+              {"requestId": "REQ-3", "equipmentId": "FUME-HOOD-4", "priority": "URGENT",
+               "requestedAt": "2026-10-20T13:00:00Z", "description": "Fume hood airflow alarm"}
             ]""";
 
     private final RequestMapper requestMapper;

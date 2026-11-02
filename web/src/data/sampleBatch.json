@@ -1,15 +1,15 @@
 [
-  { "requestId": "REQ-101", "equipmentId": "PUMP-7",    "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:15:00Z", "description": "Pump leaking" },
-  { "requestId": "REQ-102", "equipmentId": "HVAC-2",    "priority": "HIGH",     "requestedAt": "2026-10-20T07:30:00Z", "description": "Filter clogged" },
-  { "requestId": "REQ-103", "equipmentId": null,        "priority": "LOW",      "requestedAt": "2026-10-20T09:00:00Z", "description": "Light flickering" },
-  { "requestId": "REQ-104", "equipmentId": "ELEV-1",    "priority": "HIGH",     "requestedAt": "2026-10-20T07:30:00Z", "description": "Door sensor fault" },
-  { "requestId": "REQ-105", "equipmentId": "BOILER-3",  "priority": "MEDIUM",   "requestedAt": null,                   "description": "Pressure drop" },
-  { "requestId": "REQ-106", "equipmentId": "GEN-4",     "priority": "LOW",      "requestedAt": "2026-10-20T10:00:00Z", "description": "   " },
-  { "requestId": "REQ-107", "equipmentId": " pump-7 ",  "priority": "MEDIUM",   "requestedAt": "2026-10-20T09:40:00Z", "description": "  pump   LEAKING " },
-  { "requestId": "REQ-108", "equipmentId": "PUMP-7",    "priority": "CRITICAL", "requestedAt": "2026-10-20T11:05:00Z", "description": "Pump leaking" },
-  { "requestId": "REQ-109", "equipmentId": "CHILLER-1", "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:00:00Z", "description": "Compressor noise" },
-  { "requestId": "REQ-109", "equipmentId": "ROOF-2",    "priority": "LOW",      "requestedAt": "2026-10-20T12:00:00Z", "description": "Gutter blocked" },
-  { "requestId": "REQ-110", "equipmentId": "DOOR-5",    "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:00:00Z", "description": "Lock jammed" },
-  { "requestId": "REQ-111", "equipmentId": "FAN-6",     "priority": "MEDIUM",   "requestedAt": "2026-10-20T13:00:00Z", "description": "Belt squeal" },
-  { "requestId": "REQ-112", "equipmentId": "PARK-8",    "priority": "LOW",      "requestedAt": "2026-10-20T14:00:00Z", "description": "Bench repainting" }
+  { "requestId": "REQ-101", "equipmentId": "AHU-3",       "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:15:00Z", "description": "Water leak above Ward 4B" },
+  { "requestId": "REQ-102", "equipmentId": "BOILER-1",    "priority": "HIGH",     "requestedAt": "2026-10-20T07:30:00Z", "description": "Boiler pressure low in east wing" },
+  { "requestId": "REQ-103", "equipmentId": null,          "priority": "LOW",      "requestedAt": "2026-10-20T09:00:00Z", "description": "Flickering lights in library" },
+  { "requestId": "REQ-104", "equipmentId": "ELEV-2",      "priority": "HIGH",     "requestedAt": "2026-10-20T07:30:00Z", "description": "Elevator doors not closing on floor 3" },
+  { "requestId": "REQ-105", "equipmentId": "CHILLER-2",   "priority": "MEDIUM",   "requestedAt": null,                   "description": "Chiller short-cycling" },
+  { "requestId": "REQ-106", "equipmentId": "GEN-1",       "priority": "LOW",      "requestedAt": "2026-10-20T10:00:00Z", "description": "   " },
+  { "requestId": "REQ-107", "equipmentId": " ahu-3 ",     "priority": "MEDIUM",   "requestedAt": "2026-10-20T09:40:00Z", "description": "  water leak   ABOVE ward 4b " },
+  { "requestId": "REQ-108", "equipmentId": "AHU-3",       "priority": "CRITICAL", "requestedAt": "2026-10-20T11:05:00Z", "description": "Water leak above Ward 4B" },
+  { "requestId": "REQ-109", "equipmentId": "FIRE-PUMP-1", "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:00:00Z", "description": "Monthly fire pump test overdue" },
+  { "requestId": "REQ-109", "equipmentId": "ROOF-2",      "priority": "LOW",      "requestedAt": "2026-10-20T12:00:00Z", "description": "Gutter blocked over gym" },
+  { "requestId": "REQ-110", "equipmentId": "DOOR-5",      "priority": "MEDIUM",   "requestedAt": "2026-10-20T08:00:00Z", "description": "Card reader failing at main entrance" },
+  { "requestId": "REQ-111", "equipmentId": "FUME-HOOD-4", "priority": "MEDIUM",   "requestedAt": "2026-10-20T13:00:00Z", "description": "Fume hood airflow alarm in chemistry lab" },
+  { "requestId": "REQ-112", "equipmentId": "BUS-14",      "priority": "LOW",      "requestedAt": "2026-10-20T14:00:00Z", "description": "Torn seat on route 14 bus" }
 ]
