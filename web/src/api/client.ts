@@ -3,7 +3,7 @@ import type { BatchResult, RawBatch } from '../types'
 // `??` rather than `||`: an empty VITE_API_URL deliberately means "same origin" (nginx proxies /api).
 const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 
-export const UNREACHABLE_MESSAGE = 'API not reachable — is the backend running?'
+const UNREACHABLE_MESSAGE = 'API not reachable — is the backend running?'
 
 export class ApiError extends Error {
   readonly kind: 'unreachable' | 'rejected'

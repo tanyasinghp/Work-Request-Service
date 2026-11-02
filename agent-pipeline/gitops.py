@@ -102,10 +102,6 @@ def diff_between(base: str, ref: str = "HEAD") -> str:
     return git("diff", base, ref, "--", BACKEND_SRC).stdout
 
 
-def commits_since(base: str, ref: str = "HEAD") -> list[str]:
-    return git("rev-list", "--reverse", f"{base}..{ref}").stdout.split()
-
-
 def show_file(ref: str, path: str) -> str | None:
     process = git("show", f"{ref}:{path}", check=False)
     return process.stdout if process.returncode == 0 else None

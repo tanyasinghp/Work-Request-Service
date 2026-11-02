@@ -104,5 +104,3 @@ export function useProcessing() {
     setSelection, loadSample, process, stepOnce, runAll, shuffleAndRerun,
   }
 }
-
-export type ProcessingState = ReturnType<typeof useProcessing>
