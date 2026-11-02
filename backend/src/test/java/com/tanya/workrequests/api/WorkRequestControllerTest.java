@@ -136,6 +136,13 @@ class WorkRequestControllerTest {
                 .andExpect(jsonPath("$.message").value("Batch has 5001 requests; the maximum is 5000"));
     }
 
+    @Test
+    void rejectsABodyOverTheDefault2MbLimit() throws Exception {
+        postBatch(RequestBodyLimitTest.jsonArrayOf(2 * 1024 * 1024 + 1))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.message").value("Request body is larger than the 2 MB limit"));
+    }
+
     private ResultActions postBatch(String json) throws Exception {
         return mockMvc.perform(post("/api/work-requests/batch").contentType(MediaType.APPLICATION_JSON).content(json));
     }

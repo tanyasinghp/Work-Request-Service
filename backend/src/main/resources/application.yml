@@ -19,6 +19,9 @@ management:
         enabled: true
 
 app:
+  request:
+    # Checked before the body is parsed; larger bodies get a 413.
+    max-body-size: 2MB
   batch:
     max-size: 5000
   cors:
